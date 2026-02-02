@@ -37,7 +37,7 @@ class Agent(BaseModel):
 class Task(BaseModel):
     """Task document from Sanity."""
     id: str = Field(alias="_id")
-    name: str = ""  # Allow None from Sanity
+    name: str | None = None  # Allow None from Sanity
     description: str = ""
     expected_output: str = Field(alias="expectedOutput", default="")
     order: int = 0
