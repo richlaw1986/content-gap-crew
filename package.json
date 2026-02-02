@@ -1,0 +1,23 @@
+{
+  "name": "content-gap-crew",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Content Gap Discovery Crew - Sanity.io content gap analysis with CrewAI",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "echo 'Use: pnpm --filter <app> dev'",
+    "build": "pnpm -r build",
+    "lint": "pnpm -r lint",
+    "sanity:dev": "pnpm --filter sanity dev",
+    "web:dev": "pnpm --filter web dev",
+    "api:dev": "pnpm --filter api dev"
+  },
+  "engines": {
+    "node": ">=18.0.0",
+    "pnpm": ">=8.0.0"
+  },
+  "packageManager": "pnpm@9.0.0"
+}

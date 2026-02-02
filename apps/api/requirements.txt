@@ -1,0 +1,29 @@
+# FastAPI and server
+fastapi>=0.109.0
+uvicorn[standard]>=0.27.0
+pydantic>=2.5.0
+pydantic-settings>=2.1.0
+
+# HTTP client
+httpx>=0.26.0
+
+# CrewAI and LLM
+crewai>=0.28.0
+langchain-anthropic>=0.1.0
+langchain-openai>=0.0.5
+
+# Google APIs
+google-cloud-bigquery>=3.14.0
+google-auth>=2.25.0
+google-api-python-client>=2.111.0
+google-ads>=23.0.0
+
+# Reddit API
+praw>=7.7.0
+
+# Web scraping
+beautifulsoup4>=4.12.0
+requests>=2.31.0
+
+# Utilities
+python-dotenv>=1.0.0
