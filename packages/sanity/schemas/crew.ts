@@ -93,11 +93,100 @@ export default defineType({
       description: 'Default input values for crew runs',
     }),
     defineField({
-      name: 'focusAreas',
-      title: 'Focus Areas',
+      name: 'inputSchema',
+      title: 'Input Schema',
       type: 'array',
-      of: [{type: 'string'}],
-      description: 'Default focus areas/topics for content gap analysis',
+      description: 'Defines what inputs this crew requires at runtime',
+      of: [
+        {
+          type: 'object',
+          name: 'inputField',
+          title: 'Input Field',
+          fields: [
+            {
+              name: 'name',
+              title: 'Field Name',
+              type: 'string',
+              description: 'Variable name used in task templates (e.g., "topic")',
+              validation: (Rule) => Rule.required().regex(/^[a-z][a-zA-Z0-9_]*$/, {
+                name: 'camelCase',
+                invert: false,
+              }),
+            },
+            {
+              name: 'label',
+              title: 'Display Label',
+              type: 'string',
+              description: 'Human-readable label for the UI',
+              validation: (Rule) => Rule.required(),
+            },
+            {
+              name: 'type',
+              title: 'Field Type',
+              type: 'string',
+              options: {
+                list: [
+                  {title: 'Text (single line)', value: 'string'},
+                  {title: 'Text (multiline)', value: 'text'},
+                  {title: 'Number', value: 'number'},
+                  {title: 'Checkbox', value: 'boolean'},
+                  {title: 'List of strings', value: 'array'},
+                  {title: 'Dropdown', value: 'select'},
+                ],
+              },
+              initialValue: 'string',
+              validation: (Rule) => Rule.required(),
+            },
+            {
+              name: 'required',
+              title: 'Required',
+              type: 'boolean',
+              description: 'Whether this input must be provided',
+              initialValue: true,
+            },
+            {
+              name: 'placeholder',
+              title: 'Placeholder',
+              type: 'string',
+              description: 'Placeholder text for the input field',
+            },
+            {
+              name: 'helpText',
+              title: 'Help Text',
+              type: 'string',
+              description: 'Additional guidance shown below the field',
+            },
+            {
+              name: 'defaultValue',
+              title: 'Default Value',
+              type: 'string',
+              description: 'Default value (as string, parsed based on type)',
+            },
+            {
+              name: 'options',
+              title: 'Options',
+              type: 'array',
+              of: [{type: 'string'}],
+              description: 'Options for select/dropdown fields',
+              hidden: ({parent}) => parent?.type !== 'select',
+            },
+          ],
+          preview: {
+            select: {
+              name: 'name',
+              label: 'label',
+              type: 'type',
+              required: 'required',
+            },
+            prepare({name, label, type, required}) {
+              return {
+                title: label || name,
+                subtitle: `${type}${required ? ' (required)' : ''}`,
+              }
+            },
+          },
+        },
+      ],
     }),
     defineField({
       name: 'credentials',

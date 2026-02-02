@@ -224,6 +224,7 @@ const crew = {
   _id: 'crew-content-gap',
   _type: 'crew',
   name: 'Content Gap Analysis Crew',
+  displayName: 'Content Gap Analysis',
   description: 'Analyzes content gaps for SEO and AEO optimization. Uses data analysis, competitive research, and AI-powered insights to identify content opportunities.',
   process: 'sequential',
   memory: true,
@@ -231,6 +232,35 @@ const crew = {
   agents: agents.map(a => ({_type: 'reference', _ref: a._id})),
   tasks: tasks.map(t => ({_type: 'reference', _ref: t._id})),
   credentials: [], // Will be added when credentials are configured
+  inputSchema: [
+    {
+      _key: 'topic',
+      name: 'topic',
+      label: 'Analysis Topic',
+      type: 'string',
+      required: true,
+      placeholder: 'e.g., headless CMS for enterprise',
+      helpText: 'The topic or niche to analyze for content gaps',
+    },
+    {
+      _key: 'competitors',
+      name: 'competitors',
+      label: 'Competitor URLs',
+      type: 'array',
+      required: false,
+      placeholder: 'https://competitor.com',
+      helpText: 'Optional list of competitor websites to analyze',
+    },
+    {
+      _key: 'focusAreas',
+      name: 'focusAreas',
+      label: 'Focus Areas',
+      type: 'array',
+      required: false,
+      placeholder: 'e.g., tutorials, comparisons, case studies',
+      helpText: 'Specific content types or areas to prioritize',
+    },
+  ],
 }
 
 async function seed() {
