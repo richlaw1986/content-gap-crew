@@ -1,4 +1,4 @@
-// Shared types for the Content Gap Crew web app
+// Shared types for the CrewAI Platform web app
 
 export interface User {
   id: string;

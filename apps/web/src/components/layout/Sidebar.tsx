@@ -52,7 +52,7 @@ export function Sidebar({ onNewRun, selectedRunId, onSelectRun }: SidebarProps) 
           className="w-full"
           onClick={onNewRun}
         >
-          + New Analysis
+          + New Run
         </Button>
       </div>
 

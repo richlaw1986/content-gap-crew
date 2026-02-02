@@ -178,7 +178,7 @@ export default function DashboardPage() {
               </div>
             ) : (
               <p className="text-sm text-gray-500">
-                No active run. Click &quot;New Analysis&quot; to start.
+                No active run. Click &quot;New Run&quot; to start.
               </p>
             )}
           </div>

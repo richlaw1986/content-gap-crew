@@ -16,7 +16,7 @@ export function Header() {
     <header className="h-16 border-b border-gray-200 bg-white px-6 flex items-center justify-between">
       <div className="flex items-center gap-4">
         <Link href="/dashboard" className="flex items-center gap-2">
-          <span className="text-xl font-bold text-gray-900">Content Gap Crew</span>
+          <span className="text-xl font-bold text-gray-900">CrewAI Platform</span>
         </Link>
       </div>
       

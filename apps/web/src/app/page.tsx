@@ -7,10 +7,10 @@ export default function Home() {
       <div className="max-w-4xl mx-auto px-4 py-16">
         <div className="text-center">
           <h1 className="text-4xl font-bold text-gray-900 mb-4">
-            Content Gap Crew
+            CrewAI Platform
           </h1>
           <p className="text-xl text-gray-600 mb-8">
-            AI-powered content gap analysis for SEO and AEO optimization
+            Run AI agent crews for any task
           </p>
           
           <div className="bg-white rounded-xl shadow-lg p-8 mb-8">

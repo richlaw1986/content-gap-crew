@@ -14,7 +14,7 @@ interface Message {
 const INITIAL_MESSAGE: Message = {
   id: '0',
   role: 'assistant',
-  content: 'Welcome to Content Gap Crew! Enter a topic to analyze for content gaps (e.g., "AI content management" or "sustainable fashion").',
+  content: 'Welcome to CrewAI Platform! Select a crew and provide inputs to start a run.',
   timestamp: new Date().toISOString(),
 };
 
@@ -47,7 +47,7 @@ export function ChatArea({ onStartRun, onNewAnalysis, isRunning = false }: ChatA
     const assistantMessage: Message = {
       id: (Date.now() + 1).toString(),
       role: 'assistant',
-      content: `Starting content gap analysis for "${topic}". Watch the activity feed on the right to see the agents at work.`,
+      content: `Starting crew run for "${topic}". Watch the activity feed on the right to see the agents at work.`,
       timestamp: new Date().toISOString(),
     };
     setMessages(prev => [...prev, assistantMessage]);
@@ -108,7 +108,7 @@ export function ChatArea({ onStartRun, onNewAnalysis, isRunning = false }: ChatA
               onClick={onNewAnalysis}
               disabled={isRunning}
             >
-              + New Analysis
+              + New Run
             </Button>
           )}
         </div>
@@ -133,7 +133,7 @@ export function ChatArea({ onStartRun, onNewAnalysis, isRunning = false }: ChatA
           </Button>
         </form>
         <p className="mt-2 text-xs text-gray-500">
-          Use &quot;New Analysis&quot; to select a specific crew and see agent details before starting.
+          Use &quot;New Run&quot; to select a crew and configure inputs before starting.
         </p>
       </div>
     </div>

@@ -14,8 +14,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Content Gap Crew",
-  description: "AI-powered content gap analysis for SEO and AEO optimization",
+  title: "CrewAI Platform",
+  description: "Run AI agent crews for any task",
 };
 
 export default function RootLayout({
