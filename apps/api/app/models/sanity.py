@@ -46,14 +46,31 @@ class Task(BaseModel):
         populate_by_name = True
 
 
+class InputField(BaseModel):
+    """Input field definition for dynamic crew inputs."""
+    name: str
+    label: str
+    type: Literal["string", "text", "number", "boolean", "array", "select"]
+    required: bool = False
+    placeholder: str | None = None
+    help_text: str | None = Field(alias="helpText", default=None)
+    default_value: str | int | bool | list[str] | None = Field(alias="defaultValue", default=None)
+    options: list[str] = Field(default_factory=list)  # for 'select' type
+
+    class Config:
+        populate_by_name = True
+
+
 class Crew(BaseModel):
     """Crew document from Sanity."""
     id: str = Field(alias="_id")
     name: str
     slug: str = ""
+    display_name: str | None = Field(alias="displayName", default=None)
     description: str | None = None
     agents: list[Agent] = Field(default_factory=list)
     tasks: list[Task] = Field(default_factory=list)
+    input_schema: list[InputField] = Field(alias="inputSchema", default_factory=list)
     process: str = "sequential"
     verbose: bool = True
 
@@ -62,12 +79,9 @@ class Crew(BaseModel):
 
 
 class RunInputs(BaseModel):
-    """Inputs for a crew run."""
-    topic: str = ""
-    focus_areas: list[str] = Field(alias="focusAreas", default_factory=list)
-
-    class Config:
-        populate_by_name = True
+    """Dynamic inputs for a crew run - validated against crew's inputSchema."""
+    # Now accepts any key-value pairs
+    model_config = {"extra": "allow", "populate_by_name": True}
 
 
 class Run(BaseModel):

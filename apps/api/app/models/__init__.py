@@ -3,6 +3,7 @@
 from app.models.sanity import (
     Agent,
     Crew,
+    InputField,
     Run,
     RunInputs,
     Tool,
@@ -11,6 +12,7 @@ from app.models.sanity import (
 __all__ = [
     "Agent",
     "Crew",
+    "InputField",
     "Run",
     "RunInputs",
     "Tool",

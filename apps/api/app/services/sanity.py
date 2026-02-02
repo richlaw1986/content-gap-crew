@@ -6,7 +6,7 @@ import httpx
 
 from app.config import get_settings
 from app.logging_config import get_logger, log_groq_query
-from app.models import Agent, Crew, Run, RunInputs, Tool
+from app.models import Agent, Crew, InputField, Run, RunInputs, Tool
 
 logger = get_logger(__name__)
 
@@ -93,8 +93,10 @@ class SanityClient:
         query = """*[_type == "crew" && _id == $id][0] {
             _id,
             name,
+            displayName,
             slug,
             description,
+            inputSchema,
             agents[]->{
                 _id,
                 name,
@@ -110,13 +112,6 @@ class SanityClient:
                 description,
                 expectedOutput,
                 agent->
-            },
-            credentials[]->{
-                _id,
-                name,
-                type,
-                storageMethod,
-                ...
             }
         }"""
         result = await self._query(query, {"id": crew_id})
@@ -272,8 +267,35 @@ class StubSanityClient:
         return Crew(
             _id=crew_id,
             name="Content Gap Discovery Crew",
+            displayName="Content Gap Analysis",
             slug="content-gap-discovery",
             description="Analyzes content gaps",
+            inputSchema=[
+                InputField(
+                    name="topic",
+                    label="Analysis Topic",
+                    type="string",
+                    required=True,
+                    placeholder="e.g., headless CMS for enterprise",
+                    helpText="The topic or niche to analyze",
+                ),
+                InputField(
+                    name="competitors",
+                    label="Competitor URLs",
+                    type="array",
+                    required=False,
+                    placeholder="https://example.com",
+                    helpText="URLs of competitor sites to analyze",
+                ),
+                InputField(
+                    name="focusAreas",
+                    label="Focus Areas",
+                    type="array",
+                    required=False,
+                    placeholder="e.g., enterprise, developer experience",
+                    helpText="Specific areas to focus the analysis on",
+                ),
+            ],
         )
 
     async def list_runs(self, limit: int = 50, status: str | None = None) -> list[dict[str, Any]]:

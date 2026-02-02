@@ -9,6 +9,8 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 
+from app.services.input_validator import InputValidationError, validate_inputs
+
 router = APIRouter()
 
 
@@ -17,12 +19,10 @@ router = APIRouter()
 # ============================================================
 
 class CreateRunRequest(BaseModel):
-    """Request to create a new run."""
+    """Request to create a new run with dynamic inputs."""
     
     crew_id: str
-    topic: str
-    focus_areas: list[str] = []
-    custom_inputs: dict[str, str] = {}
+    inputs: dict[str, Any]  # Dynamic inputs validated against crew's inputSchema
 
 
 class RunSummary(BaseModel):
@@ -127,30 +127,45 @@ async def create_run(
     body: CreateRunRequest,
     request: Request,
 ) -> dict[str, Any]:
-    """Create a new crew run.
+    """Create a new crew run with dynamic inputs.
     
     Creates a run document in Sanity with status 'pending'.
+    Inputs are validated against the crew's inputSchema.
     Use the returned run_id to start streaming via GET /runs/{id}/stream.
+    
+    Request body:
+    {
+        "crew_id": "crew-content-gap",
+        "inputs": {
+            "topic": "headless CMS",
+            "competitors": ["https://contentful.com"],
+            "focusAreas": ["enterprise"]
+        }
+    }
     """
     sanity = request.app.state.sanity
     
-    # Verify crew exists
+    # Verify crew exists and get full details including inputSchema
     crew = await sanity.get_crew(body.crew_id)
     if not crew:
         raise HTTPException(status_code=404, detail=f"Crew not found: {body.crew_id}")
     
-    # Create run document
-    inputs = {
-        "topic": body.topic,
-        "focusAreas": body.focus_areas,
-        "customInputs": [
-            {"key": k, "value": v} for k, v in body.custom_inputs.items()
-        ],
-    }
+    # Validate inputs against crew's inputSchema
+    try:
+        validated_inputs = validate_inputs(crew, body.inputs)
+    except InputValidationError as e:
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "message": "Input validation failed",
+                "errors": e.errors,
+            }
+        )
     
+    # Create run document with validated inputs
     run_id = await sanity.create_run(
         crew_id=body.crew_id,
-        inputs=inputs,
+        inputs=validated_inputs,
         triggered_by="api",  # TODO: Get from auth context
     )
     
@@ -159,10 +174,10 @@ async def create_run(
         "status": "pending",
         "crew": {
             "id": crew.id,
-            "name": crew.name,
+            "name": crew.display_name or crew.name,
             "slug": crew.slug,
         },
-        "inputs": inputs,
+        "inputs": validated_inputs,
     }
 
 
@@ -235,12 +250,16 @@ async def stream_run(run_id: str, request: Request) -> EventSourceResponse:
         # Mock execution flow for testing
         agents = ["Data Analyst", "Product Marketer", "SEO Specialist", "Work Reviewer", "Narrative Governor"]
         
+        # Get topic from dynamic inputs (fallback for backwards compat)
+        run_inputs = run.inputs.model_dump() if hasattr(run.inputs, 'model_dump') else dict(run.inputs)
+        topic = run_inputs.get("topic", "unknown topic")
+        
         for agent in agents:
             # Thinking
             yield agent_message_event(
                 agent=agent,
                 message_type="thinking",
-                content=f"Analyzing content gaps for topic: {run.inputs.topic}...",
+                content=f"Analyzing content gaps for topic: {topic}...",
             )
             await asyncio.sleep(0.5)
             
@@ -251,7 +270,7 @@ async def stream_run(run_id: str, request: Request) -> EventSourceResponse:
                     message_type="tool_call",
                     content="Searching sitemap...",
                     tool="sanity_sitemap_lookup",
-                    args={"query": run.inputs.topic},
+                    args={"query": topic},
                 )
                 await asyncio.sleep(0.3)
                 
@@ -272,7 +291,7 @@ async def stream_run(run_id: str, request: Request) -> EventSourceResponse:
             await asyncio.sleep(0.2)
         
         # Final output
-        final_output = f"""# Content Gap Analysis: {run.inputs.topic}
+        final_output = f"""# Content Gap Analysis: {topic}
 
 ## Executive Summary
 Analysis complete. Found 5 high-priority content gaps.

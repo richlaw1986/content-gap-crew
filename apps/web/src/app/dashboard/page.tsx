@@ -43,14 +43,14 @@ export default function DashboardPage() {
     onError: handleError,
   });
 
-  const handleStartRun = async (crewId: string, topic: string) => {
+  const handleStartRun = async (crewId: string, inputs: Record<string, unknown>) => {
     try {
       setGapsFound(0);
       setPagesAnalyzed(0);
       
       const request: CreateRunRequest = {
         crew_id: crewId,
-        topic: topic,
+        inputs: inputs,
       };
       
       const run = await api.runs.create(request);
@@ -63,7 +63,7 @@ export default function DashboardPage() {
         if (err.status === 422) {
           showError('Invalid Request', 'Please check your input and try again.');
         } else if (err.status === 401 || err.status === 403) {
-          showError('Authentication Required', 'Please sign in to start an analysis.');
+          showError('Authentication Required', 'Please sign in to start a run.');
         } else if (err.status >= 500) {
           showError('Server Error', 'The server encountered an error. Please try again later.');
         } else {
@@ -77,8 +77,8 @@ export default function DashboardPage() {
 
   // Legacy handler for simple topic input from ChatArea
   const handleSimpleStartRun = async (topic: string) => {
-    // Use default crew
-    await handleStartRun('crew-content-gap', topic);
+    // Use default crew with topic as the primary input
+    await handleStartRun('crew-content-gap', { topic });
   };
 
   const errorCount = events.filter(e => e.type === 'error').length;

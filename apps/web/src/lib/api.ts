@@ -73,11 +73,7 @@ export interface Run {
     name: string;
     slug: string;
   };
-  inputs: {
-    topic: string;
-    focusAreas: string[];
-    customInputs: Record<string, string>[];
-  };
+  inputs: Record<string, unknown>;  // Dynamic inputs based on crew's inputSchema
   createdAt?: string;
   completedAt?: string;
   finalOutput?: string;
@@ -85,10 +81,7 @@ export interface Run {
 
 export interface CreateRunRequest {
   crew_id: string;
-  topic: string;
-  target_url?: string;
-  focus_areas?: string[];
-  custom_inputs?: Record<string, string>[];
+  inputs: Record<string, unknown>;
 }
 
 export interface Crew {

@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react';
 import { Button } from '@/components/ui';
 import { api } from '@/lib/api';
+import { DynamicFormField, InputField } from './DynamicFormField';
 
 interface Crew {
   _id: string;
@@ -18,6 +19,7 @@ interface CrewDetails {
   name: string;
   description: string;
   process: string;
+  inputSchema?: InputField[];
   agents: Array<{
     _id: string;
     name: string;
@@ -34,7 +36,7 @@ interface CrewDetails {
 }
 
 interface CrewPickerProps {
-  onStartRun: (crewId: string, topic: string) => void;
+  onStartRun: (crewId: string, inputs: Record<string, unknown>) => void;
   isRunning?: boolean;
   onCancel?: () => void;
 }
@@ -43,11 +45,12 @@ export function CrewPicker({ onStartRun, isRunning = false, onCancel }: CrewPick
   const [crews, setCrews] = useState<Crew[]>([]);
   const [selectedCrew, setSelectedCrew] = useState<Crew | null>(null);
   const [crewDetails, setCrewDetails] = useState<CrewDetails | null>(null);
-  const [topic, setTopic] = useState('');
+  const [inputs, setInputs] = useState<Record<string, unknown>>({});
   const [loadingCrews, setLoadingCrews] = useState(true);
   const [loadingDetails, setLoadingDetails] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Fetch crews on mount
   useEffect(() => {
     async function fetchCrews() {
       try {
@@ -67,9 +70,11 @@ export function CrewPicker({ onStartRun, isRunning = false, onCancel }: CrewPick
     fetchCrews();
   }, []);
 
+  // Fetch crew details when selection changes
   useEffect(() => {
     if (!selectedCrew) {
       setCrewDetails(null);
+      setInputs({});
       return;
     }
 
@@ -78,7 +83,23 @@ export function CrewPicker({ onStartRun, isRunning = false, onCancel }: CrewPick
       try {
         setLoadingDetails(true);
         const data = await api.crews.get(selectedCrew._id);
-        setCrewDetails(data as unknown as CrewDetails);
+        const details = data as unknown as CrewDetails;
+        setCrewDetails(details);
+        
+        // Initialize inputs with default values from schema
+        const initialInputs: Record<string, unknown> = {};
+        if (details.inputSchema) {
+          for (const field of details.inputSchema) {
+            if (field.defaultValue !== undefined && field.defaultValue !== null) {
+              initialInputs[field.name] = field.defaultValue;
+            } else if (field.type === 'array') {
+              initialInputs[field.name] = [];
+            } else if (field.type === 'boolean') {
+              initialInputs[field.name] = false;
+            }
+          }
+        }
+        setInputs(initialInputs);
       } catch (err) {
         console.error('Error fetching crew details:', err);
       } finally {
@@ -88,10 +109,33 @@ export function CrewPicker({ onStartRun, isRunning = false, onCancel }: CrewPick
     fetchDetails();
   }, [selectedCrew]);
 
+  const handleInputChange = (name: string, value: unknown) => {
+    setInputs(prev => ({ ...prev, [name]: value }));
+  };
+
+  const isFormValid = (): boolean => {
+    if (!selectedCrew || !crewDetails?.inputSchema) return false;
+    
+    for (const field of crewDetails.inputSchema) {
+      if (field.required) {
+        const value = inputs[field.name];
+        if (value === undefined || value === null || value === '') {
+          return false;
+        }
+        if (field.type === 'array' && Array.isArray(value) && value.length === 0) {
+          // Arrays are valid even if empty for required fields (user might not need to add items)
+          // But if it's truly required, we check for at least one item
+          // For now, let's be lenient - empty array is OK
+        }
+      }
+    }
+    return true;
+  };
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedCrew || !topic.trim()) return;
-    onStartRun(selectedCrew._id, topic.trim());
+    if (!selectedCrew || !isFormValid()) return;
+    onStartRun(selectedCrew._id, inputs);
   };
 
   if (loadingCrews) {
@@ -110,14 +154,27 @@ export function CrewPicker({ onStartRun, isRunning = false, onCancel }: CrewPick
     );
   }
 
+  // Get input schema or fall back to default topic field
+  const inputSchema: InputField[] = crewDetails?.inputSchema || [
+    {
+      name: 'topic',
+      label: 'Topic',
+      type: 'string',
+      required: true,
+      placeholder: 'Enter a topic...',
+      helpText: 'The main topic for this run',
+    }
+  ];
+
   return (
     <div className="max-w-2xl mx-auto p-6">
-      <h2 className="text-2xl font-bold text-gray-900 mb-2">Start New Analysis</h2>
+      <h2 className="text-2xl font-bold text-gray-900 mb-2">Start New Run</h2>
       <p className="text-gray-600 mb-6">
-        Select a crew and enter a topic to analyze for content gaps.
+        Select a crew and configure the inputs to start a new run.
       </p>
 
       <form onSubmit={handleSubmit} className="space-y-6">
+        {/* Crew Selection */}
         <div>
           <label className="block text-sm font-medium text-gray-700 mb-2">
             Select Crew
@@ -153,6 +210,7 @@ export function CrewPicker({ onStartRun, isRunning = false, onCancel }: CrewPick
           </div>
         </div>
 
+        {/* Crew Preview */}
         {selectedCrew && (
           <div className="bg-gray-50 rounded-lg p-4">
             <h4 className="font-medium text-gray-900 mb-3">Crew Preview</h4>
@@ -192,39 +250,38 @@ export function CrewPicker({ onStartRun, isRunning = false, onCancel }: CrewPick
               </div>
             ) : (
               <p className="text-sm text-gray-500">
-                {selectedCrew.agentCount} agents will analyze your topic through {selectedCrew.taskCount} tasks.
+                {selectedCrew.agentCount} agents will process your inputs through {selectedCrew.taskCount} tasks.
               </p>
             )}
           </div>
         )}
 
-        <div>
-          <label htmlFor="topic" className="block text-sm font-medium text-gray-700 mb-2">
-            Analysis Topic
-          </label>
-          <input
-            id="topic"
-            type="text"
-            value={topic}
-            onChange={(e) => setTopic(e.target.value)}
-            placeholder="e.g., headless CMS for enterprise, sustainable fashion trends"
-            className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-            disabled={isRunning}
-          />
-          <p className="mt-1 text-xs text-gray-500">
-            Enter the topic or niche you want to analyze for content gaps
-          </p>
-        </div>
+        {/* Dynamic Input Fields */}
+        {selectedCrew && (
+          <div className="space-y-4">
+            <h4 className="font-medium text-gray-900">Inputs</h4>
+            {inputSchema.map((field) => (
+              <DynamicFormField
+                key={field.name}
+                field={field}
+                value={inputs[field.name]}
+                onChange={handleInputChange}
+                disabled={isRunning}
+              />
+            ))}
+          </div>
+        )}
 
+        {/* Submit Buttons */}
         <div className="space-y-2">
           <Button
             type="submit"
             variant="primary"
             size="lg"
             className="w-full"
-            disabled={!selectedCrew || !topic.trim() || isRunning}
+            disabled={!selectedCrew || !isFormValid() || isRunning}
           >
-            {isRunning ? 'Starting Analysis...' : 'Start Analysis'}
+            {isRunning ? 'Starting Run...' : 'Start Run'}
           </Button>
 
           {onCancel && (
