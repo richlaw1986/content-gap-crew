@@ -48,15 +48,12 @@ export function CrewPicker({ onStartRun, isRunning = false, onCancel }: CrewPick
   const [loadingDetails, setLoadingDetails] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Fetch available crews on mount
   useEffect(() => {
     async function fetchCrews() {
       try {
         setLoadingCrews(true);
         const data = await api.crews.list();
         setCrews(data as unknown as Crew[]);
-        
-        // Auto-select if only one crew
         if (data.length === 1) {
           setSelectedCrew(data[0] as unknown as Crew);
         }
@@ -70,7 +67,6 @@ export function CrewPicker({ onStartRun, isRunning = false, onCancel }: CrewPick
     fetchCrews();
   }, []);
 
-  // Fetch crew details when selected
   useEffect(() => {
     if (!selectedCrew) {
       setCrewDetails(null);
@@ -78,13 +74,13 @@ export function CrewPicker({ onStartRun, isRunning = false, onCancel }: CrewPick
     }
 
     async function fetchDetails() {
+      if (!selectedCrew) return;
       try {
         setLoadingDetails(true);
         const data = await api.crews.get(selectedCrew._id);
         setCrewDetails(data as unknown as CrewDetails);
       } catch (err) {
         console.error('Error fetching crew details:', err);
-        // Don't show error - details are optional
       } finally {
         setLoadingDetails(false);
       }
@@ -122,7 +118,6 @@ export function CrewPicker({ onStartRun, isRunning = false, onCancel }: CrewPick
       </p>
 
       <form onSubmit={handleSubmit} className="space-y-6">
-        {/* Crew Selection */}
         <div>
           <label className="block text-sm font-medium text-gray-700 mb-2">
             Select Crew
@@ -158,7 +153,6 @@ export function CrewPicker({ onStartRun, isRunning = false, onCancel }: CrewPick
           </div>
         </div>
 
-        {/* Crew Details Preview */}
         {selectedCrew && (
           <div className="bg-gray-50 rounded-lg p-4">
             <h4 className="font-medium text-gray-900 mb-3">Crew Preview</h4>
@@ -167,7 +161,6 @@ export function CrewPicker({ onStartRun, isRunning = false, onCancel }: CrewPick
               <p className="text-sm text-gray-500">Loading details...</p>
             ) : crewDetails ? (
               <div className="space-y-4">
-                {/* Agents */}
                 <div>
                   <h5 className="text-sm font-medium text-gray-700 mb-2">Agents</h5>
                   <div className="flex flex-wrap gap-2">
@@ -183,7 +176,6 @@ export function CrewPicker({ onStartRun, isRunning = false, onCancel }: CrewPick
                   </div>
                 </div>
 
-                {/* Tasks */}
                 <div>
                   <h5 className="text-sm font-medium text-gray-700 mb-2">Workflow</h5>
                   <ol className="space-y-2">
@@ -206,7 +198,6 @@ export function CrewPicker({ onStartRun, isRunning = false, onCancel }: CrewPick
           </div>
         )}
 
-        {/* Topic Input */}
         <div>
           <label htmlFor="topic" className="block text-sm font-medium text-gray-700 mb-2">
             Analysis Topic
@@ -225,30 +216,30 @@ export function CrewPicker({ onStartRun, isRunning = false, onCancel }: CrewPick
           </p>
         </div>
 
-        {/* Submit */}
-        <Button
-          type="submit"
-          variant="primary"
-          size="lg"
-          className="w-full"
-          disabled={!selectedCrew || !topic.trim() || isRunning}
-        >
-          {isRunning ? 'Starting Analysis...' : 'Start Analysis'}
-        </Button>
-
-        {onCancel && (
+        <div className="space-y-2">
           <Button
-            type="button"
-            variant="outline"
-            className="w-full mt-2"
-            onClick={onCancel}
-            disabled={isRunning}
+            type="submit"
+            variant="primary"
+            size="lg"
+            className="w-full"
+            disabled={!selectedCrew || !topic.trim() || isRunning}
           >
-            Cancel
+            {isRunning ? 'Starting Analysis...' : 'Start Analysis'}
           </Button>
-        )}
-        </form>
-      </div>
+
+          {onCancel && (
+            <Button
+              type="button"
+              variant="outline"
+              className="w-full"
+              onClick={onCancel}
+              disabled={isRunning}
+            >
+              Cancel
+            </Button>
+          )}
+        </div>
+      </form>
     </div>
   );
 }
