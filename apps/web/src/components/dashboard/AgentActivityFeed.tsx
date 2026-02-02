@@ -1,66 +1,63 @@
 'use client';
 
-interface AgentEvent {
-  id: string;
-  type: 'thinking' | 'tool_call' | 'tool_result' | 'message';
-  agent: string;
-  content: string;
-  tool?: string;
-  timestamp: string;
-}
-
-// Placeholder events - will be replaced with SSE stream data
-const PLACEHOLDER_EVENTS: AgentEvent[] = [
-  {
-    id: '1',
-    type: 'thinking',
-    agent: 'Data Analyst',
-    content: 'Analyzing sitemap structure...',
-    timestamp: new Date().toISOString(),
-  },
-  {
-    id: '2',
-    type: 'tool_call',
-    agent: 'Data Analyst',
-    content: 'Fetching sitemap data',
-    tool: 'sanity_sitemap_lookup',
-    timestamp: new Date().toISOString(),
-  },
-  {
-    id: '3',
-    type: 'tool_result',
-    agent: 'Data Analyst',
-    content: 'Found 47 pages in sitemap',
-    tool: 'sanity_sitemap_lookup',
-    timestamp: new Date().toISOString(),
-  },
-];
+import { RunStreamEvent } from '@/lib/hooks';
 
 interface AgentActivityFeedProps {
-  events?: AgentEvent[];
+  events?: RunStreamEvent[];
   isLive?: boolean;
+  isConnected?: boolean;
 }
 
 export function AgentActivityFeed({ 
-  events = PLACEHOLDER_EVENTS, 
-  isLive = false 
+  events = [], 
+  isLive = false,
+  isConnected = false,
 }: AgentActivityFeedProps) {
-  const getEventIcon = (type: AgentEvent['type']) => {
+  const getEventIcon = (type: RunStreamEvent['type']) => {
     switch (type) {
-      case 'thinking': return '💭';
+      case 'agent_message': return '💭';
       case 'tool_call': return '🔧';
       case 'tool_result': return '✅';
-      case 'message': return '💬';
+      case 'complete': return '🎉';
+      case 'error': return '❌';
     }
   };
 
-  const getEventColor = (type: AgentEvent['type']) => {
+  const getEventColor = (type: RunStreamEvent['type']) => {
     switch (type) {
-      case 'thinking': return 'border-l-blue-400';
+      case 'agent_message': return 'border-l-blue-400';
       case 'tool_call': return 'border-l-yellow-400';
       case 'tool_result': return 'border-l-green-400';
-      case 'message': return 'border-l-purple-400';
+      case 'complete': return 'border-l-purple-400';
+      case 'error': return 'border-l-red-400';
     }
+  };
+
+  const getEventContent = (event: RunStreamEvent): string => {
+    switch (event.type) {
+      case 'agent_message':
+        return event.content;
+      case 'tool_call':
+        return `Calling ${event.tool}`;
+      case 'tool_result':
+        return event.result.length > 100 
+          ? event.result.substring(0, 100) + '...' 
+          : event.result;
+      case 'complete':
+        return 'Analysis complete!';
+      case 'error':
+        return event.message;
+    }
+  };
+
+  const getAgentName = (event: RunStreamEvent): string | undefined => {
+    if ('agent' in event) return event.agent;
+    return undefined;
+  };
+
+  const getToolName = (event: RunStreamEvent): string | undefined => {
+    if ('tool' in event) return event.tool;
+    return undefined;
   };
 
   const formatTime = (timestamp: string) => {
@@ -75,12 +72,20 @@ export function AgentActivityFeed({
     <div className="bg-gray-900 text-gray-100 rounded-lg overflow-hidden">
       <div className="px-4 py-3 border-b border-gray-700 flex items-center justify-between">
         <h3 className="text-sm font-semibold">Agent Activity</h3>
-        {isLive && (
-          <span className="flex items-center gap-2 text-xs text-green-400">
-            <span className="w-2 h-2 bg-green-400 rounded-full animate-pulse" />
-            Live
-          </span>
-        )}
+        <div className="flex items-center gap-2">
+          {isConnected && (
+            <span className="flex items-center gap-2 text-xs text-blue-400">
+              <span className="w-2 h-2 bg-blue-400 rounded-full animate-pulse" />
+              Connected
+            </span>
+          )}
+          {isLive && (
+            <span className="flex items-center gap-2 text-xs text-green-400">
+              <span className="w-2 h-2 bg-green-400 rounded-full animate-pulse" />
+              Live
+            </span>
+          )}
+        </div>
       </div>
       
       <div className="max-h-64 overflow-y-auto">
@@ -90,29 +95,31 @@ export function AgentActivityFeed({
           </div>
         ) : (
           <ul className="divide-y divide-gray-800">
-            {events.map((event) => (
+            {events.map((event, index) => (
               <li 
-                key={event.id}
+                key={`${event.type}-${index}`}
                 className={`px-4 py-3 border-l-4 ${getEventColor(event.type)}`}
               >
                 <div className="flex items-start gap-3">
                   <span className="text-lg">{getEventIcon(event.type)}</span>
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2 mb-1">
-                      <span className="text-xs font-medium text-blue-400">
-                        {event.agent}
-                      </span>
-                      {event.tool && (
+                      {getAgentName(event) && (
+                        <span className="text-xs font-medium text-blue-400">
+                          {getAgentName(event)}
+                        </span>
+                      )}
+                      {getToolName(event) && (
                         <span className="text-xs text-gray-500 font-mono">
-                          {event.tool}
+                          {getToolName(event)}
                         </span>
                       )}
                       <span className="text-xs text-gray-600 ml-auto">
                         {formatTime(event.timestamp)}
                       </span>
                     </div>
-                    <p className="text-sm text-gray-300 truncate">
-                      {event.content}
+                    <p className="text-sm text-gray-300 break-words">
+                      {getEventContent(event)}
                     </p>
                   </div>
                 </div>

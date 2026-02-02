@@ -1,46 +1,43 @@
-"""
-Application configuration using Pydantic Settings.
-
-Environment variables:
-- SANITY_PROJECT_ID: Sanity project ID
-- SANITY_DATASET: Sanity dataset (default: production)
-- SANITY_API_TOKEN: Sanity API token for read/write access
-- ANTHROPIC_API_KEY: Anthropic API key for LLM calls
-- ENVIRONMENT: development | staging | production
-"""
+"""Application configuration using pydantic-settings."""
 
 from functools import lru_cache
-from pydantic_settings import BaseSettings
+
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
-    
-    # Sanity CMS
-    sanity_project_id: str
-    sanity_dataset: str = "production"
-    sanity_api_token: str
-    sanity_api_version: str = "2024-01-01"
-    
-    # LLM Configuration
-    anthropic_api_key: str
-    
-    # LLM Model tiers (can be overridden per environment)
-    llm_model_default: str = "claude-sonnet-4-5-20250929"
-    llm_model_smart: str = "claude-opus-4-5-20251101"
-    llm_model_fast: str = "claude-haiku-4-5-20251001"
-    llm_temperature: float = 0.7
-    
-    # Application
-    environment: str = "development"
+
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+    )
+
+    # API Settings
+    api_host: str = "0.0.0.0"
+    api_port: int = 8000
     debug: bool = False
-    
-    # CORS (for local development)
-    cors_origins: list[str] = ["http://localhost:3000"]
-    
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
+
+    # Sanity Configuration (optional for dev with stub client)
+    sanity_project_id: str = ""
+    sanity_dataset: str = "production"
+    sanity_api_version: str = "2024-01-01"
+    sanity_token: str = ""
+
+    # LLM Configuration
+    anthropic_api_key: str = ""
+    default_llm_model: str = "claude-sonnet-4-5-20250929"
+    smart_llm_model: str = "claude-opus-4-5-20251101"
+    fast_llm_model: str = "claude-haiku-4-5-20251001"
+
+    # Optional: OpenAI for query fanout
+    openai_api_key: str = ""
+
+    @property
+    def sanity_configured(self) -> bool:
+        """Check if Sanity is properly configured."""
+        return bool(self.sanity_project_id and self.sanity_token)
 
 
 @lru_cache
