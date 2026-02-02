@@ -40,13 +40,15 @@ class SanityClient:
 
     async def _query(self, groq: str, params: dict[str, Any] | None = None) -> Any:
         """Execute a GROQ query against Sanity."""
+        import json as json_module
         log_groq_query(logger, groq, params)
         
         client = await self._get_client()
         query_params = {"query": groq}
         if params:
             for key, value in params.items():
-                query_params[f"${key}"] = value
+                # Sanity expects JSON-encoded parameter values
+                query_params[f"${key}"] = json_module.dumps(value)
 
         response = await client.get(self.base_url, params=query_params)
         response.raise_for_status()

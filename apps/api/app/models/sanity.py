@@ -37,7 +37,7 @@ class Agent(BaseModel):
 class Task(BaseModel):
     """Task document from Sanity."""
     id: str = Field(alias="_id")
-    name: str
+    name: str = ""  # Allow None from Sanity
     description: str = ""
     expected_output: str = Field(alias="expectedOutput", default="")
     order: int = 0
@@ -65,7 +65,7 @@ class Crew(BaseModel):
     """Crew document from Sanity."""
     id: str = Field(alias="_id")
     name: str
-    slug: str = ""
+    slug: str | None = None  # Allow None from Sanity
     display_name: str | None = Field(alias="displayName", default=None)
     description: str | None = None
     agents: list[Agent] = Field(default_factory=list)
