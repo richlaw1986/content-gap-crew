@@ -7,6 +7,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
+from app.logging_config import get_logger, setup_logging
 from app.routers import agents, crews, health, runs
 from app.services.sanity import get_sanity_client
 
@@ -15,14 +16,24 @@ from app.services.sanity import get_sanity_client
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Application lifespan handler."""
     settings = get_settings()
+    
+    # Initialize logging
+    setup_logging(
+        level="DEBUG" if settings.debug else "INFO",
+        json_format=not settings.debug  # Human-readable in dev, JSON in prod
+    )
+    logger = get_logger(__name__)
+    
     app.state.sanity = get_sanity_client()
     
-    if settings.debug:
-        print(f"Starting Content Gap Crew API (debug={settings.debug})")
-        print(f"Sanity configured: {app.state.sanity.configured}")
+    logger.info(
+        f"Starting Content Gap Crew API",
+        extra={"debug": settings.debug, "sanity_configured": app.state.sanity.configured}
+    )
     
     yield
     
+    logger.info("Shutting down Content Gap Crew API")
     await app.state.sanity.close()
 
 

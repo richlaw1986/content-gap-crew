@@ -23,7 +23,7 @@ class Settings(BaseSettings):
     sanity_project_id: str = ""
     sanity_dataset: str = "production"
     sanity_api_version: str = "2024-01-01"
-    sanity_token: str = ""
+    sanity_api_token: str = ""
 
     # LLM Configuration
     anthropic_api_key: str = ""
@@ -37,7 +37,7 @@ class Settings(BaseSettings):
     @property
     def sanity_configured(self) -> bool:
         """Check if Sanity is properly configured."""
-        return bool(self.sanity_project_id and self.sanity_token)
+        return bool(self.sanity_project_id and self.sanity_api_token)
 
 
 @lru_cache

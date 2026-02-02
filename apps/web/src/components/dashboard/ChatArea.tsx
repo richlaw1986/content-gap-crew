@@ -20,10 +20,11 @@ const INITIAL_MESSAGE: Message = {
 
 interface ChatAreaProps {
   onStartRun?: (topic: string) => void;
+  onNewAnalysis?: () => void;
   isRunning?: boolean;
 }
 
-export function ChatArea({ onStartRun, isRunning = false }: ChatAreaProps) {
+export function ChatArea({ onStartRun, onNewAnalysis, isRunning = false }: ChatAreaProps) {
   const [messages, setMessages] = useState<Message[]>([INITIAL_MESSAGE]);
   const [input, setInput] = useState('');
 
@@ -99,6 +100,18 @@ export function ChatArea({ onStartRun, isRunning = false }: ChatAreaProps) {
 
       {/* Input area */}
       <div className="border-t border-gray-200 p-4">
+        <div className="flex gap-3 mb-3">
+          {onNewAnalysis && (
+            <Button
+              type="button"
+              variant="primary"
+              onClick={onNewAnalysis}
+              disabled={isRunning}
+            >
+              + New Analysis
+            </Button>
+          )}
+        </div>
         <form onSubmit={handleSubmit} className="flex gap-3">
           <input
             type="text"
@@ -106,19 +119,22 @@ export function ChatArea({ onStartRun, isRunning = false }: ChatAreaProps) {
             onChange={(e) => setInput(e.target.value)}
             placeholder={isRunning 
               ? "Analysis in progress..." 
-              : "Enter a topic to analyze (e.g., AI content management)..."
+              : "Quick start: enter a topic and press Analyze..."
             }
             className="flex-1 px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:bg-gray-50 disabled:text-gray-500"
             disabled={isRunning}
           />
           <Button 
             type="submit" 
-            variant="primary" 
+            variant="outline" 
             disabled={isRunning || !input.trim()}
           >
-            {isRunning ? 'Running...' : 'Analyze'}
+            {isRunning ? 'Running...' : 'Quick Analyze'}
           </Button>
         </form>
+        <p className="mt-2 text-xs text-gray-500">
+          Use &quot;New Analysis&quot; to select a specific crew and see agent details before starting.
+        </p>
       </div>
     </div>
   );

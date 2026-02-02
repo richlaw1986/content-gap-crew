@@ -3,26 +3,25 @@
 import { useState, useCallback } from 'react';
 import { ChatArea } from '@/components/dashboard';
 import { AgentActivityFeed } from '@/components/dashboard';
+import { CrewPicker } from '@/components/dashboard';
 import { ToastContainer } from '@/components/ui';
 import { useRunStream, useToast, RunStreamEvent } from '@/lib/hooks';
 import { api, CreateRunRequest, ApiError } from '@/lib/api';
 
 export default function DashboardPage() {
   const [currentRunId, setCurrentRunId] = useState<string | null>(null);
+  const [showCrewPicker, setShowCrewPicker] = useState(false);
   const [gapsFound, setGapsFound] = useState(0);
   const [pagesAnalyzed, setPagesAnalyzed] = useState(0);
   const { toasts, dismissToast, success, error: showError, warning } = useToast();
 
   const handleEvent = useCallback((event: RunStreamEvent) => {
-    // Update stats based on events
     if (event.type === 'tool_result') {
-      // Increment pages analyzed for certain tools
       if (event.tool.includes('content') || event.tool.includes('sitemap')) {
         setPagesAnalyzed(prev => prev + 1);
       }
     }
     
-    // Show warning toast for errors in the stream
     if (event.type === 'error') {
       warning('Agent Error', event.message);
     }
@@ -30,6 +29,7 @@ export default function DashboardPage() {
 
   const handleComplete = useCallback((output: string) => {
     success('Analysis Complete', 'Content gap analysis finished successfully.');
+    setShowCrewPicker(false);
     console.log('Run complete:', output);
   }, [success]);
 
@@ -43,20 +43,19 @@ export default function DashboardPage() {
     onError: handleError,
   });
 
-  const handleStartRun = async (topic: string) => {
+  const handleStartRun = async (crewId: string, topic: string) => {
     try {
-      // Reset stats
       setGapsFound(0);
       setPagesAnalyzed(0);
       
       const request: CreateRunRequest = {
-        crew_id: 'crew-content-gap',
+        crew_id: crewId,
         topic: topic,
-        target_url: topic.startsWith('http') ? topic : undefined,
       };
       
       const run = await api.runs.create(request);
       setCurrentRunId(run.id);
+      setShowCrewPicker(false);
     } catch (err) {
       console.error('Failed to start run:', err);
       
@@ -76,19 +75,39 @@ export default function DashboardPage() {
     }
   };
 
-  // Count errors in events
+  // Legacy handler for simple topic input from ChatArea
+  const handleSimpleStartRun = async (topic: string) => {
+    // Use default crew
+    await handleStartRun('crew-content-gap', topic);
+  };
+
   const errorCount = events.filter(e => e.type === 'error').length;
+  const isRunning = isConnected && !isComplete;
 
   return (
     <>
       <ToastContainer toasts={toasts} onDismiss={dismissToast} />
       
+      {/* Crew Picker Modal */}
+      {showCrewPicker && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl shadow-2xl max-w-lg w-full max-h-[90vh] overflow-y-auto">
+            <CrewPicker
+              onStartRun={handleStartRun}
+              isRunning={isRunning}
+              onCancel={() => setShowCrewPicker(false)}
+            />
+          </div>
+        </div>
+      )}
+      
       <div className="h-full flex flex-col lg:flex-row">
         {/* Main chat area */}
         <div className="flex-1 min-w-0">
           <ChatArea 
-            onStartRun={handleStartRun}
-            isRunning={isConnected && !isComplete}
+            onStartRun={handleSimpleStartRun}
+            onNewAnalysis={() => setShowCrewPicker(true)}
+            isRunning={isRunning}
           />
         </div>
         
@@ -96,11 +115,10 @@ export default function DashboardPage() {
         <div className="lg:w-96 border-t lg:border-t-0 lg:border-l border-gray-200 p-4 bg-gray-50">
           <AgentActivityFeed 
             events={events} 
-            isLive={isConnected && !isComplete}
+            isLive={isRunning}
             isConnected={isConnected}
           />
           
-          {/* Connection error banner */}
           {error && !isConnected && (
             <div className="mt-4 p-3 bg-red-100 border border-red-200 rounded-lg">
               <div className="flex items-start gap-2">
@@ -113,7 +131,6 @@ export default function DashboardPage() {
             </div>
           )}
           
-          {/* Quick stats */}
           <div className="mt-4 grid grid-cols-2 gap-3">
             <div className="bg-white rounded-lg p-4 border border-gray-200">
               <div className="text-2xl font-bold text-gray-900">{gapsFound}</div>
@@ -125,7 +142,6 @@ export default function DashboardPage() {
             </div>
           </div>
 
-          {/* Error count indicator */}
           {errorCount > 0 && (
             <div className="mt-3 p-3 bg-red-50 border border-red-200 rounded-lg">
               <div className="flex items-center gap-2">
@@ -137,7 +153,6 @@ export default function DashboardPage() {
             </div>
           )}
           
-          {/* Run info */}
           <div className="mt-4 bg-white rounded-lg p-4 border border-gray-200">
             <h4 className="text-sm font-semibold text-gray-900 mb-2">Current Run</h4>
             {currentRunId ? (
@@ -163,7 +178,7 @@ export default function DashboardPage() {
               </div>
             ) : (
               <p className="text-sm text-gray-500">
-                No active run. Start a new analysis to see details here.
+                No active run. Click &quot;New Analysis&quot; to start.
               </p>
             )}
           </div>

@@ -5,10 +5,38 @@ from typing import Any
 
 from pydantic import BaseModel
 
+from app.logging_config import get_logger, log_credential_resolution
+
+logger = get_logger(__name__)
+
 
 class CredentialError(Exception):
     """Raised when required credentials are missing or invalid."""
     pass
+
+
+class ToolError(Exception):
+    """Raised when a tool execution fails."""
+    pass
+
+
+def mask_credential(value: str) -> str:
+    """Mask a credential value for safe logging.
+    
+    Shows just enough to identify which credential was used
+    without exposing the full secret.
+    
+    Args:
+        value: The credential value to mask
+        
+    Returns:
+        Masked string like "sk-p...xyz9"
+    """
+    if not value:
+        return "***"
+    if len(value) <= 8:
+        return "***"
+    return f"{value[:4]}...{value[-4:]}"
 
 
 def resolve_credential_value(credential: dict[str, Any], field: str) -> str:
@@ -34,15 +62,19 @@ def resolve_credential_value(credential: dict[str, Any], field: str) -> str:
         # Value is an env var name
         env_value = os.environ.get(value)
         if not env_value:
+            log_credential_resolution(logger, field, storage_method, resolved=False, env_var=value)
             raise CredentialError(
                 f"Environment variable '{value}' not set for credential field '{field}'"
             )
+        log_credential_resolution(logger, field, storage_method, resolved=True, env_var=value)
         return env_value
     elif storage_method == "direct":
         # Value is the actual credential
+        log_credential_resolution(logger, field, storage_method, resolved=True)
         return value
     elif storage_method == "external":
         # TODO: Implement external secret manager lookup
+        log_credential_resolution(logger, field, storage_method, resolved=False)
         raise CredentialError(f"External secret manager not yet implemented for field '{field}'")
     else:
         raise CredentialError(f"Unknown storage method: {storage_method}")

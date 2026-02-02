@@ -5,7 +5,10 @@ from typing import Any
 
 from crewai.tools import tool
 
+from app.logging_config import get_logger, log_tool_execution
 from app.tools.base import CredentialError, resolve_credential_value
+
+logger = get_logger(__name__)
 
 
 def get_bigquery_client(credential: dict[str, Any]):
@@ -92,26 +95,27 @@ def bigquery_describe_table(table_name: str, credential: dict[str, Any]) -> str:
     Raises:
         CredentialError: If credentials are missing or invalid
     """
-    client = get_bigquery_client(credential)
-    
-    # Resolve alias to full table ID if needed
-    tables = credential.get("bigqueryTables", [])
-    table_mapping = {t.get("alias"): t.get("fullTableId") for t in tables}
-    
-    if table_name in table_mapping:
-        full_table_id = table_mapping[table_name]
-    elif table_name in table_mapping.values():
-        full_table_id = table_name
-    else:
-        available = list(table_mapping.keys())
-        raise CredentialError(
-            f"Unknown table '{table_name}'. Available aliases: {available}"
-        )
-    
-    try:
-        table = client.get_table(full_table_id)
+    with log_tool_execution(logger, "bigquery_describe_table", {"table_name": table_name}):
+        client = get_bigquery_client(credential)
         
-        result = f"""
+        # Resolve alias to full table ID if needed
+        tables = credential.get("bigqueryTables", [])
+        table_mapping = {t.get("alias"): t.get("fullTableId") for t in tables}
+        
+        if table_name in table_mapping:
+            full_table_id = table_mapping[table_name]
+        elif table_name in table_mapping.values():
+            full_table_id = table_name
+        else:
+            available = list(table_mapping.keys())
+            raise CredentialError(
+                f"Unknown table '{table_name}'. Available aliases: {available}"
+            )
+        
+        try:
+            table = client.get_table(full_table_id)
+            
+            result = f"""
 BIGQUERY TABLE SCHEMA
 =====================
 Table: {full_table_id}
@@ -122,36 +126,36 @@ Size: {table.num_bytes / (1024*1024):.2f} MB
 
 COLUMNS:
 """
-        for field in table.schema:
-            result += f"  - {field.name}: {field.field_type}"
-            if field.mode == "REPEATED":
-                result += " (ARRAY)"
-            if field.description:
-                result += f" -- {field.description}"
-            result += "\n"
-        
-        # Get sample data
-        sample_query = f"SELECT * FROM `{full_table_id}` LIMIT 5"
-        sample_df = client.query(sample_query).to_dataframe()
-        
-        result += f"\nSAMPLE DATA (first 5 rows):\n"
-        result += sample_df.to_string(max_colwidth=50)
-        
-        # Get date range if there's a timestamp column
-        date_columns = [
-            f.name for f in table.schema 
-            if "date" in f.name.lower() or "time" in f.name.lower() or "timestamp" in f.name.lower()
-        ]
-        if date_columns:
-            date_col = date_columns[0]
-            range_query = f"SELECT MIN({date_col}) as min_date, MAX({date_col}) as max_date FROM `{full_table_id}`"
-            range_df = client.query(range_query).to_dataframe()
-            result += f"\n\nDATE RANGE ({date_col}): {range_df['min_date'].iloc[0]} to {range_df['max_date'].iloc[0]}"
-        
-        return result
-        
-    except Exception as e:
-        raise CredentialError(f"Error describing table: {str(e)}")
+            for field in table.schema:
+                result += f"  - {field.name}: {field.field_type}"
+                if field.mode == "REPEATED":
+                    result += " (ARRAY)"
+                if field.description:
+                    result += f" -- {field.description}"
+                result += "\n"
+            
+            # Get sample data
+            sample_query = f"SELECT * FROM `{full_table_id}` LIMIT 5"
+            sample_df = client.query(sample_query).to_dataframe()
+            
+            result += f"\nSAMPLE DATA (first 5 rows):\n"
+            result += sample_df.to_string(max_colwidth=50)
+            
+            # Get date range if there's a timestamp column
+            date_columns = [
+                f.name for f in table.schema 
+                if "date" in f.name.lower() or "time" in f.name.lower() or "timestamp" in f.name.lower()
+            ]
+            if date_columns:
+                date_col = date_columns[0]
+                range_query = f"SELECT MIN({date_col}) as min_date, MAX({date_col}) as max_date FROM `{full_table_id}`"
+                range_df = client.query(range_query).to_dataframe()
+                result += f"\n\nDATE RANGE ({date_col}): {range_df['min_date'].iloc[0]} to {range_df['max_date'].iloc[0]}"
+            
+            return result
+            
+        except Exception as e:
+            raise CredentialError(f"Error describing table: {str(e)}")
 
 
 @tool
