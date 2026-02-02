@@ -231,22 +231,22 @@ export function CrewPicker({ onStartRun, isRunning = false, onCancel }: CrewPick
           variant="primary"
           size="lg"
           className="w-full"
-            disabled={!selectedCrew || !topic.trim() || isRunning}
-          >
-            {isRunning ? 'Starting Analysis...' : 'Start Analysis'}
-          </Button>
+          disabled={!selectedCrew || !topic.trim() || isRunning}
+        >
+          {isRunning ? 'Starting Analysis...' : 'Start Analysis'}
+        </Button>
 
-          {onCancel && (
-            <Button
-              type="button"
-              variant="outline"
-              className="w-full mt-2"
-              onClick={onCancel}
-              disabled={isRunning}
-            >
-              Cancel
-            </Button>
-          )}
+        {onCancel && (
+          <Button
+            type="button"
+            variant="outline"
+            className="w-full mt-2"
+            onClick={onCancel}
+            disabled={isRunning}
+          >
+            Cancel
+          </Button>
+        )}
         </form>
       </div>
     </div>
