@@ -11,11 +11,7 @@ interface Run {
 }
 
 // Placeholder data - will be replaced with real API data
-const PLACEHOLDER_RUNS: Run[] = [
-  { id: '1', title: 'example.com analysis', status: 'completed', createdAt: '2026-02-02T14:30:00Z' },
-  { id: '2', title: 'competitor.io gaps', status: 'completed', createdAt: '2026-02-02T12:00:00Z' },
-  { id: '3', title: 'blog.site.com review', status: 'running', createdAt: '2026-02-02T15:00:00Z' },
-];
+const PLACEHOLDER_RUNS: Run[] = [];
 
 interface SidebarProps {
   onNewRun?: () => void;
