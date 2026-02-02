@@ -1,5 +1,6 @@
 'use client';
 
+import { useState } from 'react';
 import { RunStreamEvent } from '@/lib/hooks';
 
 interface AgentActivityFeedProps {
@@ -13,6 +14,38 @@ export function AgentActivityFeed({
   isLive = false,
   isConnected = false,
 }: AgentActivityFeedProps) {
+  const [expandedErrors, setExpandedErrors] = useState<Set<number>>(new Set());
+  const [copiedIndex, setCopiedIndex] = useState<number | null>(null);
+
+  const toggleErrorExpanded = (index: number) => {
+    setExpandedErrors(prev => {
+      const next = new Set(prev);
+      if (next.has(index)) {
+        next.delete(index);
+      } else {
+        next.add(index);
+      }
+      return next;
+    });
+  };
+
+  const copyError = async (event: RunStreamEvent, index: number) => {
+    if (event.type !== 'error') return;
+    
+    const errorText = [
+      `Error: ${event.message}`,
+      `Time: ${event.timestamp}`,
+    ].join('\n');
+
+    try {
+      await navigator.clipboard.writeText(errorText);
+      setCopiedIndex(index);
+      setTimeout(() => setCopiedIndex(null), 2000);
+    } catch (err) {
+      console.error('Failed to copy:', err);
+    }
+  };
+
   const getEventIcon = (type: RunStreamEvent['type']) => {
     switch (type) {
       case 'agent_message': return '💭';
@@ -25,11 +58,11 @@ export function AgentActivityFeed({
 
   const getEventColor = (type: RunStreamEvent['type']) => {
     switch (type) {
-      case 'agent_message': return 'border-l-blue-400';
-      case 'tool_call': return 'border-l-yellow-400';
-      case 'tool_result': return 'border-l-green-400';
-      case 'complete': return 'border-l-purple-400';
-      case 'error': return 'border-l-red-400';
+      case 'agent_message': return 'border-l-blue-400 bg-gray-800';
+      case 'tool_call': return 'border-l-yellow-400 bg-gray-800';
+      case 'tool_result': return 'border-l-green-400 bg-gray-800';
+      case 'complete': return 'border-l-purple-400 bg-purple-900/30';
+      case 'error': return 'border-l-red-500 bg-red-900/30';
     }
   };
 
@@ -68,10 +101,20 @@ export function AgentActivityFeed({
     });
   };
 
+  // Check if there are any errors
+  const hasErrors = events.some(e => e.type === 'error');
+
   return (
     <div className="bg-gray-900 text-gray-100 rounded-lg overflow-hidden">
       <div className="px-4 py-3 border-b border-gray-700 flex items-center justify-between">
-        <h3 className="text-sm font-semibold">Agent Activity</h3>
+        <div className="flex items-center gap-2">
+          <h3 className="text-sm font-semibold">Agent Activity</h3>
+          {hasErrors && (
+            <span className="px-2 py-0.5 bg-red-500/20 text-red-400 text-xs rounded-full">
+              Errors
+            </span>
+          )}
+        </div>
         <div className="flex items-center gap-2">
           {isConnected && (
             <span className="flex items-center gap-2 text-xs text-blue-400">
@@ -88,7 +131,7 @@ export function AgentActivityFeed({
         </div>
       </div>
       
-      <div className="max-h-64 overflow-y-auto">
+      <div className="max-h-80 overflow-y-auto">
         {events.length === 0 ? (
           <div className="p-4 text-center text-gray-500 text-sm">
             No activity yet. Start an analysis to see agent activity.
@@ -101,26 +144,66 @@ export function AgentActivityFeed({
                 className={`px-4 py-3 border-l-4 ${getEventColor(event.type)}`}
               >
                 <div className="flex items-start gap-3">
-                  <span className="text-lg">{getEventIcon(event.type)}</span>
+                  <span className="text-lg flex-shrink-0">{getEventIcon(event.type)}</span>
                   <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 mb-1">
+                    <div className="flex items-center gap-2 mb-1 flex-wrap">
                       {getAgentName(event) && (
-                        <span className="text-xs font-medium text-blue-400">
+                        <span className={`text-xs font-medium ${
+                          event.type === 'error' ? 'text-red-400' : 'text-blue-400'
+                        }`}>
                           {getAgentName(event)}
                         </span>
                       )}
                       {getToolName(event) && (
-                        <span className="text-xs text-gray-500 font-mono">
+                        <span className={`text-xs font-mono ${
+                          event.type === 'error' ? 'text-red-300' : 'text-gray-500'
+                        }`}>
                           {getToolName(event)}
                         </span>
                       )}
-                      <span className="text-xs text-gray-600 ml-auto">
+                      <span className="text-xs text-gray-600 ml-auto flex-shrink-0">
                         {formatTime(event.timestamp)}
                       </span>
                     </div>
-                    <p className="text-sm text-gray-300 break-words">
+                    
+                    <p className={`text-sm break-words ${
+                      event.type === 'error' ? 'text-red-300' : 'text-gray-300'
+                    }`}>
                       {getEventContent(event)}
                     </p>
+
+                    {/* Error-specific UI */}
+                    {event.type === 'error' && (
+                      <div className="mt-2 flex items-center gap-2">
+                        <button
+                          onClick={() => toggleErrorExpanded(index)}
+                          className="text-xs text-red-400 hover:text-red-300 underline"
+                        >
+                          {expandedErrors.has(index) ? 'Hide details' : 'Show details'}
+                        </button>
+                        <button
+                          onClick={() => copyError(event, index)}
+                          className="text-xs text-red-400 hover:text-red-300 px-2 py-0.5 rounded hover:bg-red-900/50 transition-colors"
+                        >
+                          {copiedIndex === index ? '✓ Copied' : 'Copy error'}
+                        </button>
+                      </div>
+                    )}
+
+                    {/* Expanded error details */}
+                    {event.type === 'error' && expandedErrors.has(index) && (
+                      <div className="mt-2 p-2 bg-red-950/50 rounded text-xs">
+                        <div className="text-red-400 font-mono">
+                          <div>Type: {event.type}</div>
+                          <div>Message: {event.message}</div>
+                          <div>Timestamp: {event.timestamp}</div>
+                        </div>
+                        <p className="mt-2 text-red-300/70 text-xs">
+                          💡 Tip: This error may indicate missing credentials or API configuration. 
+                          Check the backend logs for more details.
+                        </p>
+                      </div>
+                    )}
                   </div>
                 </div>
               </li>
@@ -128,6 +211,15 @@ export function AgentActivityFeed({
           </ul>
         )}
       </div>
+
+      {/* Error summary footer */}
+      {hasErrors && (
+        <div className="px-4 py-2 border-t border-red-900/50 bg-red-950/30">
+          <p className="text-xs text-red-400">
+            ⚠️ Some operations failed. Check error details above.
+          </p>
+        </div>
+      )}
     </div>
   );
 }

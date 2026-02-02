@@ -68,17 +68,27 @@ export async function fetchApi<T>(
 export interface Run {
   id: string;
   status: 'pending' | 'running' | 'completed' | 'failed';
-  targetUrl: string;
-  competitorUrls: string[];
-  createdAt: string;
+  crew: {
+    id: string;
+    name: string;
+    slug: string;
+  };
+  inputs: {
+    topic: string;
+    focusAreas: string[];
+    customInputs: Record<string, string>[];
+  };
+  createdAt?: string;
   completedAt?: string;
   finalOutput?: string;
 }
 
 export interface CreateRunRequest {
-  targetUrl: string;
-  competitorUrls?: string[];
-  crewId?: string;
+  crew_id: string;
+  topic: string;
+  target_url?: string;
+  focus_areas?: string[];
+  custom_inputs?: Record<string, string>[];
 }
 
 export interface Crew {

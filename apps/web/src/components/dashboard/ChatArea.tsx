@@ -14,27 +14,18 @@ interface Message {
 const INITIAL_MESSAGE: Message = {
   id: '0',
   role: 'assistant',
-  content: 'Welcome to Content Gap Crew! Enter a URL to analyze, or describe what you\'d like to research.',
+  content: 'Welcome to Content Gap Crew! Enter a topic to analyze for content gaps (e.g., "AI content management" or "sustainable fashion").',
   timestamp: new Date().toISOString(),
 };
 
 interface ChatAreaProps {
-  onStartRun?: (targetUrl: string) => void;
+  onStartRun?: (topic: string) => void;
   isRunning?: boolean;
 }
 
 export function ChatArea({ onStartRun, isRunning = false }: ChatAreaProps) {
   const [messages, setMessages] = useState<Message[]>([INITIAL_MESSAGE]);
   const [input, setInput] = useState('');
-
-  const isUrl = (text: string): boolean => {
-    try {
-      new URL(text.startsWith('http') ? text : `https://${text}`);
-      return text.includes('.');
-    } catch {
-      return false;
-    }
-  };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -49,31 +40,18 @@ export function ChatArea({ onStartRun, isRunning = false }: ChatAreaProps) {
     
     setMessages(prev => [...prev, userMessage]);
     
-    // Check if input looks like a URL
-    if (isUrl(input.trim())) {
-      const url = input.trim().startsWith('http') 
-        ? input.trim() 
-        : `https://${input.trim()}`;
-      
-      const assistantMessage: Message = {
-        id: (Date.now() + 1).toString(),
-        role: 'assistant',
-        content: `Starting content gap analysis for ${url}. Watch the activity feed on the right to see the agents at work.`,
-        timestamp: new Date().toISOString(),
-      };
-      setMessages(prev => [...prev, assistantMessage]);
-      
-      onStartRun?.(url);
-    } else {
-      // Not a URL - provide guidance
-      const assistantMessage: Message = {
-        id: (Date.now() + 1).toString(),
-        role: 'assistant',
-        content: 'To start an analysis, please enter a website URL (e.g., example.com or https://example.com). I\'ll analyze it for content gaps compared to competitors.',
-        timestamp: new Date().toISOString(),
-      };
-      setMessages(prev => [...prev, assistantMessage]);
-    }
+    // Start analysis with the input as the topic
+    const topic = input.trim();
+    
+    const assistantMessage: Message = {
+      id: (Date.now() + 1).toString(),
+      role: 'assistant',
+      content: `Starting content gap analysis for "${topic}". Watch the activity feed on the right to see the agents at work.`,
+      timestamp: new Date().toISOString(),
+    };
+    setMessages(prev => [...prev, assistantMessage]);
+    
+    onStartRun?.(topic);
     
     setInput('');
   };
@@ -128,7 +106,7 @@ export function ChatArea({ onStartRun, isRunning = false }: ChatAreaProps) {
             onChange={(e) => setInput(e.target.value)}
             placeholder={isRunning 
               ? "Analysis in progress..." 
-              : "Enter a URL to analyze (e.g., example.com)..."
+              : "Enter a topic to analyze (e.g., AI content management)..."
             }
             className="flex-1 px-4 py-3 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent disabled:bg-gray-50 disabled:text-gray-500"
             disabled={isRunning}

@@ -8,3 +8,5 @@ export type {
   UseRunStreamOptions,
   UseRunStreamReturn,
 } from './useRunStream';
+
+export { useToast } from './useToast';

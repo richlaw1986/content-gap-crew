@@ -27,9 +27,9 @@ class Settings(BaseSettings):
 
     # LLM Configuration
     anthropic_api_key: str = ""
-    default_llm_model: str = "claude-sonnet-4-5-20250929"
-    smart_llm_model: str = "claude-opus-4-5-20251101"
-    fast_llm_model: str = "claude-haiku-4-5-20251001"
+    default_llm_model: str = "claude-sonnet-4-20250514"
+    smart_llm_model: str = "claude-opus-4-20250514"
+    fast_llm_model: str = "claude-3-5-haiku-20241022"
 
     # Optional: OpenAI for query fanout
     openai_api_key: str = ""

@@ -12,8 +12,11 @@ import { NextRequest } from 'next/server';
 const FASTAPI_URL = process.env.FASTAPI_URL || 'http://localhost:8000';
 
 async function proxyRequest(request: NextRequest, path: string[]) {
-  // Path already includes everything after /api/, so just use it directly
-  const targetPath = `/${path.join('/')}`;
+  // The catch-all receives path segments after /api/
+  // FastAPI has /health at root, but /api/* for other routes
+  // So /api/health -> /health, /api/runs -> /api/runs
+  const pathStr = path.join('/');
+  const targetPath = pathStr === 'health' ? '/health' : `/api/${pathStr}`;
   const targetUrl = new URL(targetPath, FASTAPI_URL);
   
   // Forward query params
