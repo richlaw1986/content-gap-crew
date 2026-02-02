@@ -11,15 +11,17 @@ import { api, CreateRunRequest, ApiError } from '@/lib/api';
 export default function DashboardPage() {
   const [currentRunId, setCurrentRunId] = useState<string | null>(null);
   const [showCrewPicker, setShowCrewPicker] = useState(false);
-  const [gapsFound, setGapsFound] = useState(0);
-  const [pagesAnalyzed, setPagesAnalyzed] = useState(0);
+  const [toolCalls, setToolCalls] = useState(0);
+  const [agentMessages, setAgentMessages] = useState(0);
   const { toasts, dismissToast, success, error: showError, warning } = useToast();
 
   const handleEvent = useCallback((event: RunStreamEvent) => {
-    if (event.type === 'tool_result') {
-      if (event.tool.includes('content') || event.tool.includes('sitemap')) {
-        setPagesAnalyzed(prev => prev + 1);
-      }
+    if (event.type === 'tool_call' || event.type === 'tool_result') {
+      setToolCalls(prev => prev + 1);
+    }
+    
+    if (event.type === 'agent_message') {
+      setAgentMessages(prev => prev + 1);
     }
     
     if (event.type === 'error') {
@@ -28,7 +30,7 @@ export default function DashboardPage() {
   }, [warning]);
 
   const handleComplete = useCallback((output: string) => {
-    success('Analysis Complete', 'Content gap analysis finished successfully.');
+    success('Run Complete', 'Crew run finished successfully.');
     setShowCrewPicker(false);
     console.log('Run complete:', output);
   }, [success]);
@@ -45,8 +47,8 @@ export default function DashboardPage() {
 
   const handleStartRun = async (crewId: string, inputs: Record<string, unknown>) => {
     try {
-      setGapsFound(0);
-      setPagesAnalyzed(0);
+      setToolCalls(0);
+      setAgentMessages(0);
       
       const request: CreateRunRequest = {
         crew_id: crewId,
@@ -76,9 +78,10 @@ export default function DashboardPage() {
   };
 
   // Legacy handler for simple topic input from ChatArea
+  // This uses the first available crew - in production, should prompt user to select
   const handleSimpleStartRun = async (topic: string) => {
-    // Use default crew with topic as the primary input
-    await handleStartRun('crew-content-gap', { topic });
+    // Pass topic as a generic input - crew's inputSchema will validate
+    await handleStartRun('default', { topic });
   };
 
   const errorCount = events.filter(e => e.type === 'error').length;
@@ -131,14 +134,14 @@ export default function DashboardPage() {
             </div>
           )}
           
-          <div className="mt-4 grid grid-cols-2 gap-3">
+            <div className="mt-4 grid grid-cols-2 gap-3">
             <div className="bg-white rounded-lg p-4 border border-gray-200">
-              <div className="text-2xl font-bold text-gray-900">{gapsFound}</div>
-              <div className="text-xs text-gray-500">Gaps Found</div>
+              <div className="text-2xl font-bold text-gray-900">{toolCalls}</div>
+              <div className="text-xs text-gray-500">Tool Calls</div>
             </div>
             <div className="bg-white rounded-lg p-4 border border-gray-200">
-              <div className="text-2xl font-bold text-gray-900">{pagesAnalyzed}</div>
-              <div className="text-xs text-gray-500">Pages Analyzed</div>
+              <div className="text-2xl font-bold text-gray-900">{agentMessages}</div>
+              <div className="text-xs text-gray-500">Agent Messages</div>
             </div>
           </div>
 
@@ -147,7 +150,7 @@ export default function DashboardPage() {
               <div className="flex items-center gap-2">
                 <span className="text-red-500">⚠️</span>
                 <span className="text-sm text-red-700">
-                  {errorCount} error{errorCount > 1 ? 's' : ''} during analysis
+                  {errorCount} error{errorCount > 1 ? 's' : ''} during run
                 </span>
               </div>
             </div>
