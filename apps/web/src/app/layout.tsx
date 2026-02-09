@@ -14,8 +14,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "CrewAI Platform",
-  description: "Run AI agent crews for any task",
+  title: "Agent Studio",
+  description: "Build and run AI agent crews for any workflow",
 };
 
 export default function RootLayout({

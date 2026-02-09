@@ -48,14 +48,14 @@ export function Sidebar({ onNewRun, selectedRunId, onSelectRun }: SidebarProps) 
           className="w-full"
           onClick={onNewRun}
         >
-          + New Run
+          + New Workflow
         </Button>
       </div>
 
       <div className="flex-1 overflow-y-auto">
         <div className="p-4">
           <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">
-            Recent Runs
+            Recent Workflows
           </h3>
           <ul className="space-y-2">
             {runs.map((run) => (
@@ -86,7 +86,7 @@ export function Sidebar({ onNewRun, selectedRunId, onSelectRun }: SidebarProps) 
 
       <div className="p-4 border-t border-border">
         <p className="text-xs text-muted-foreground text-center">
-          {runs.length} runs total
+          {runs.length} total
         </p>
       </div>
     </aside>

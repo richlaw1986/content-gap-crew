@@ -56,7 +56,7 @@ export function ErrorDisplay({
 
   return (
     <div
-      className={`bg-red-50 border border-red-200 text-red-800 ${baseStyles[variant]}`}
+      className={`bg-surface border border-red-200 text-red-700 ${baseStyles[variant]}`}
       role="alert"
     >
       <div className="flex items-start justify-between gap-3">
@@ -87,7 +87,7 @@ export function ErrorDisplay({
                   {isExpanded ? 'Hide details' : 'Show details'}
                 </button>
                 {isExpanded && (
-                  <pre className="mt-2 p-2 bg-red-100 rounded text-xs overflow-x-auto whitespace-pre-wrap font-mono">
+                  <pre className="mt-2 p-2 bg-red-50 rounded text-xs overflow-x-auto whitespace-pre-wrap font-mono">
                     {details}
                   </pre>
                 )}
@@ -99,7 +99,7 @@ export function ErrorDisplay({
         <div className="flex items-center gap-2 flex-shrink-0">
           <button
             onClick={handleCopy}
-            className="text-xs text-red-600 hover:text-red-800 px-2 py-1 rounded hover:bg-red-100 transition-colors"
+            className="text-xs text-red-600 hover:text-red-700 px-2 py-1 rounded hover:bg-red-50 transition-colors"
             title="Copy error details"
           >
             {copied ? '✓ Copied' : 'Copy'}
@@ -109,7 +109,7 @@ export function ErrorDisplay({
               variant="outline"
               size="sm"
               onClick={onRetry}
-              className="border-red-300 text-red-700 hover:bg-red-100"
+              className="border-red-200 text-red-700 hover:bg-red-50"
             >
               Retry
             </Button>

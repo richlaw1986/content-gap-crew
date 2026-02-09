@@ -2,10 +2,9 @@
 
 from typing import Any
 
-from crewai_tools import tool
+from crewai.tools import tool
 
 from app.services.sanity import get_sanity_client
-from app.tools import TOOL_REGISTRY
 
 
 @tool
@@ -13,6 +12,7 @@ def list_available_tools(include_mcp: bool = True) -> str:
     """List available tools, including MCP-provided tools when enabled."""
     import asyncio
     import json
+    from app.tools import TOOL_REGISTRY
 
     local_tools = []
     for name, tool_fn in TOOL_REGISTRY.items():

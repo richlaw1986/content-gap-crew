@@ -58,11 +58,11 @@ export function AgentActivityFeed({
 
   const getEventColor = (type: RunStreamEvent['type']) => {
     switch (type) {
-      case 'agent_message': return 'border-l-blue-400 bg-gray-800';
-      case 'tool_call': return 'border-l-yellow-400 bg-gray-800';
-      case 'tool_result': return 'border-l-green-400 bg-gray-800';
-      case 'complete': return 'border-l-purple-400 bg-purple-900/30';
-      case 'error': return 'border-l-red-500 bg-red-900/30';
+      case 'agent_message': return 'border-l-sky-400 bg-surface-muted';
+      case 'tool_call': return 'border-l-amber-400 bg-surface-muted';
+      case 'tool_result': return 'border-l-emerald-400 bg-surface-muted';
+      case 'complete': return 'border-l-violet-400 bg-surface-muted';
+      case 'error': return 'border-l-red-500 bg-red-50';
     }
   };
 
@@ -77,7 +77,7 @@ export function AgentActivityFeed({
           ? event.result.substring(0, 100) + '...' 
           : event.result;
       case 'complete':
-        return 'Analysis complete!';
+        return 'Workflow complete!';
       case 'error':
         return event.message;
     }
@@ -105,26 +105,26 @@ export function AgentActivityFeed({
   const hasErrors = events.some(e => e.type === 'error');
 
   return (
-    <div className="bg-gray-900 text-gray-100 rounded-lg overflow-hidden">
-      <div className="px-4 py-3 border-b border-gray-700 flex items-center justify-between">
+    <div className="bg-surface border border-border text-foreground rounded-lg overflow-hidden">
+      <div className="px-4 py-3 border-b border-border flex items-center justify-between">
         <div className="flex items-center gap-2">
           <h3 className="text-sm font-semibold">Agent Activity</h3>
           {hasErrors && (
-            <span className="px-2 py-0.5 bg-red-500/20 text-red-400 text-xs rounded-full">
+            <span className="px-2 py-0.5 bg-red-100 text-red-700 text-xs rounded-full">
               Errors
             </span>
           )}
         </div>
         <div className="flex items-center gap-2">
           {isConnected && (
-            <span className="flex items-center gap-2 text-xs text-blue-400">
-              <span className="w-2 h-2 bg-blue-400 rounded-full animate-pulse" />
+            <span className="flex items-center gap-2 text-xs text-sky-500">
+              <span className="w-2 h-2 bg-sky-500 rounded-full animate-pulse" />
               Connected
             </span>
           )}
           {isLive && (
-            <span className="flex items-center gap-2 text-xs text-green-400">
-              <span className="w-2 h-2 bg-green-400 rounded-full animate-pulse" />
+            <span className="flex items-center gap-2 text-xs text-emerald-500">
+              <span className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse" />
               Live
             </span>
           )}
@@ -133,11 +133,11 @@ export function AgentActivityFeed({
       
       <div className="max-h-80 overflow-y-auto">
         {events.length === 0 ? (
-          <div className="p-4 text-center text-gray-500 text-sm">
-            No activity yet. Start an analysis to see agent activity.
+          <div className="p-4 text-center text-muted-foreground text-sm">
+            No activity yet. Start a workflow to see agent activity.
           </div>
         ) : (
-          <ul className="divide-y divide-gray-800">
+          <ul className="divide-y divide-border">
             {events.map((event, index) => (
               <li 
                 key={`${event.type}-${index}`}
@@ -149,25 +149,25 @@ export function AgentActivityFeed({
                     <div className="flex items-center gap-2 mb-1 flex-wrap">
                       {getAgentName(event) && (
                         <span className={`text-xs font-medium ${
-                          event.type === 'error' ? 'text-red-400' : 'text-blue-400'
+                          event.type === 'error' ? 'text-red-600' : 'text-sky-600'
                         }`}>
                           {getAgentName(event)}
                         </span>
                       )}
                       {getToolName(event) && (
                         <span className={`text-xs font-mono ${
-                          event.type === 'error' ? 'text-red-300' : 'text-gray-500'
+                          event.type === 'error' ? 'text-red-500' : 'text-muted-foreground'
                         }`}>
                           {getToolName(event)}
                         </span>
                       )}
-                      <span className="text-xs text-gray-600 ml-auto flex-shrink-0">
+                      <span className="text-xs text-muted-foreground ml-auto flex-shrink-0">
                         {formatTime(event.timestamp)}
                       </span>
                     </div>
                     
                     <p className={`text-sm break-words ${
-                      event.type === 'error' ? 'text-red-300' : 'text-gray-300'
+                      event.type === 'error' ? 'text-red-600' : 'text-foreground'
                     }`}>
                       {getEventContent(event)}
                     </p>
@@ -177,13 +177,13 @@ export function AgentActivityFeed({
                       <div className="mt-2 flex items-center gap-2">
                         <button
                           onClick={() => toggleErrorExpanded(index)}
-                          className="text-xs text-red-400 hover:text-red-300 underline"
+                          className="text-xs text-red-600 hover:text-red-700 underline"
                         >
                           {expandedErrors.has(index) ? 'Hide details' : 'Show details'}
                         </button>
                         <button
                           onClick={() => copyError(event, index)}
-                          className="text-xs text-red-400 hover:text-red-300 px-2 py-0.5 rounded hover:bg-red-900/50 transition-colors"
+                          className="text-xs text-red-600 hover:text-red-700 px-2 py-0.5 rounded hover:bg-red-100 transition-colors"
                         >
                           {copiedIndex === index ? '✓ Copied' : 'Copy error'}
                         </button>
@@ -192,13 +192,13 @@ export function AgentActivityFeed({
 
                     {/* Expanded error details */}
                     {event.type === 'error' && expandedErrors.has(index) && (
-                      <div className="mt-2 p-2 bg-red-950/50 rounded text-xs">
-                        <div className="text-red-400 font-mono">
+                      <div className="mt-2 p-2 bg-red-50 rounded text-xs">
+                        <div className="text-red-600 font-mono">
                           <div>Type: {event.type}</div>
                           <div>Message: {event.message}</div>
                           <div>Timestamp: {event.timestamp}</div>
                         </div>
-                        <p className="mt-2 text-red-300/70 text-xs">
+                        <p className="mt-2 text-red-600/70 text-xs">
                           💡 Tip: This error may indicate missing credentials or API configuration. 
                           Check the backend logs for more details.
                         </p>
@@ -214,8 +214,8 @@ export function AgentActivityFeed({
 
       {/* Error summary footer */}
       {hasErrors && (
-        <div className="px-4 py-2 border-t border-red-900/50 bg-red-950/30">
-          <p className="text-xs text-red-400">
+        <div className="px-4 py-2 border-t border-red-200 bg-red-50">
+          <p className="text-xs text-red-600">
             ⚠️ Some operations failed. Check error details above.
           </p>
         </div>

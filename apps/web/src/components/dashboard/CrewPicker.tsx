@@ -141,7 +141,7 @@ export function CrewPicker({ onStartRun, isRunning = false, onCancel }: CrewPick
   if (loadingCrews) {
     return (
       <div className="flex items-center justify-center p-8">
-        <div className="text-gray-500">Loading crews...</div>
+        <div className="text-muted-foreground">Loading crews...</div>
       </div>
     );
   }
@@ -168,15 +168,15 @@ export function CrewPicker({ onStartRun, isRunning = false, onCancel }: CrewPick
 
   return (
     <div className="max-w-2xl mx-auto p-6">
-      <h2 className="text-2xl font-bold text-gray-900 mb-2">Start New Run</h2>
-      <p className="text-gray-600 mb-6">
-        Select a crew and configure the inputs to start a new run.
+      <h2 className="text-2xl font-semibold text-foreground mb-2">Start New Workflow</h2>
+      <p className="text-muted-foreground mb-6">
+        Select a crew and configure inputs to launch a workflow.
       </p>
 
       <form onSubmit={handleSubmit} className="space-y-6">
         {/* Crew Selection */}
         <div>
-          <label className="block text-sm font-medium text-gray-700 mb-2">
+          <label className="block text-sm font-medium text-foreground mb-2">
             Select Crew
           </label>
           <div className="grid gap-3">
@@ -187,20 +187,20 @@ export function CrewPicker({ onStartRun, isRunning = false, onCancel }: CrewPick
                 onClick={() => setSelectedCrew(crew)}
                 className={`text-left p-4 rounded-lg border-2 transition-all ${
                   selectedCrew?._id === crew._id
-                    ? 'border-blue-500 bg-blue-50'
-                    : 'border-gray-200 hover:border-gray-300 bg-white'
+                    ? 'border-accent bg-surface-muted'
+                    : 'border-border hover:border-accent/60 bg-surface'
                 }`}
               >
                 <div className="flex items-start justify-between">
                   <div>
-                    <h3 className="font-semibold text-gray-900">{crew.name}</h3>
-                    <p className="text-sm text-gray-600 mt-1">{crew.description}</p>
+                    <h3 className="font-semibold text-foreground">{crew.name}</h3>
+                    <p className="text-sm text-muted-foreground mt-1">{crew.description}</p>
                   </div>
-                  <div className="flex gap-2 text-xs text-gray-500">
-                    <span className="px-2 py-1 bg-gray-100 rounded">
+                  <div className="flex gap-2 text-xs text-muted-foreground">
+                    <span className="px-2 py-1 bg-surface-muted rounded">
                       {crew.agentCount} agents
                     </span>
-                    <span className="px-2 py-1 bg-gray-100 rounded">
+                    <span className="px-2 py-1 bg-surface-muted rounded">
                       {crew.taskCount} tasks
                     </span>
                   </div>
@@ -212,20 +212,20 @@ export function CrewPicker({ onStartRun, isRunning = false, onCancel }: CrewPick
 
         {/* Crew Preview */}
         {selectedCrew && (
-          <div className="bg-gray-50 rounded-lg p-4">
-            <h4 className="font-medium text-gray-900 mb-3">Crew Preview</h4>
+          <div className="bg-surface-muted rounded-lg p-4 border border-border">
+            <h4 className="font-medium text-foreground mb-3">Crew Preview</h4>
             
             {loadingDetails ? (
-              <p className="text-sm text-gray-500">Loading details...</p>
+              <p className="text-sm text-muted-foreground">Loading details...</p>
             ) : crewDetails ? (
               <div className="space-y-4">
                 <div>
-                  <h5 className="text-sm font-medium text-gray-700 mb-2">Agents</h5>
+                  <h5 className="text-sm font-medium text-muted-foreground mb-2">Agents</h5>
                   <div className="flex flex-wrap gap-2">
                     {crewDetails.agents?.map((agent) => (
                       <span
                         key={agent._id}
-                        className="px-3 py-1 bg-white border border-gray-200 rounded-full text-sm"
+                        className="px-3 py-1 bg-surface border border-border rounded-full text-sm text-foreground"
                         title={agent.role}
                       >
                         {agent.name}
@@ -235,21 +235,21 @@ export function CrewPicker({ onStartRun, isRunning = false, onCancel }: CrewPick
                 </div>
 
                 <div>
-                  <h5 className="text-sm font-medium text-gray-700 mb-2">Workflow</h5>
+                  <h5 className="text-sm font-medium text-muted-foreground mb-2">Workflow</h5>
                   <ol className="space-y-2">
                     {crewDetails.tasks?.sort((a, b) => a.order - b.order).map((task, index) => (
                       <li key={task._id} className="flex items-start gap-2 text-sm">
-                        <span className="flex-shrink-0 w-5 h-5 bg-blue-100 text-blue-700 rounded-full flex items-center justify-center text-xs font-medium">
+                        <span className="flex-shrink-0 w-5 h-5 bg-surface text-muted-foreground border border-border rounded-full flex items-center justify-center text-xs font-medium">
                           {index + 1}
                         </span>
-                        <span className="text-gray-600">{task.description}</span>
+                        <span className="text-muted-foreground">{task.description}</span>
                       </li>
                     ))}
                   </ol>
                 </div>
               </div>
             ) : (
-              <p className="text-sm text-gray-500">
+              <p className="text-sm text-muted-foreground">
                 {selectedCrew.agentCount} agents will process your inputs through {selectedCrew.taskCount} tasks.
               </p>
             )}
@@ -259,7 +259,7 @@ export function CrewPicker({ onStartRun, isRunning = false, onCancel }: CrewPick
         {/* Dynamic Input Fields */}
         {selectedCrew && (
           <div className="space-y-4">
-            <h4 className="font-medium text-gray-900">Inputs</h4>
+            <h4 className="font-medium text-foreground">Inputs</h4>
             {inputSchema.map((field) => (
               <DynamicFormField
                 key={field.name}
@@ -281,7 +281,7 @@ export function CrewPicker({ onStartRun, isRunning = false, onCancel }: CrewPick
             className="w-full"
             disabled={!selectedCrew || !isFormValid() || isRunning}
           >
-            {isRunning ? 'Starting Run...' : 'Start Run'}
+            {isRunning ? 'Starting Workflow...' : 'Start Workflow'}
           </Button>
 
           {onCancel && (

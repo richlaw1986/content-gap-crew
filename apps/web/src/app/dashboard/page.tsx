@@ -3,14 +3,12 @@
 import { useState, useCallback } from 'react';
 import { ChatArea } from '@/components/dashboard';
 import { AgentActivityFeed } from '@/components/dashboard';
-import { CrewPicker } from '@/components/dashboard';
 import { ToastContainer } from '@/components/ui';
 import { useRunStream, useToast, RunStreamEvent } from '@/lib/hooks';
 import { api, CreateRunRequest, ApiError } from '@/lib/api';
 
 export default function DashboardPage() {
   const [currentRunId, setCurrentRunId] = useState<string | null>(null);
-  const [showCrewPicker, setShowCrewPicker] = useState(false);
   const [toolCalls, setToolCalls] = useState(0);
   const [agentMessages, setAgentMessages] = useState(0);
   const { toasts, dismissToast, success, error: showError, warning } = useToast();
@@ -31,7 +29,6 @@ export default function DashboardPage() {
 
   const handleComplete = useCallback((output: string) => {
     success('Run Complete', 'Crew run finished successfully.');
-    setShowCrewPicker(false);
     console.log('Run complete:', output);
   }, [success]);
 
@@ -45,19 +42,18 @@ export default function DashboardPage() {
     onError: handleError,
   });
 
-  const handleStartRun = async (crewId: string, inputs: Record<string, unknown>) => {
+  const handleStartRun = async (objective: string) => {
     try {
       setToolCalls(0);
       setAgentMessages(0);
       
       const request: CreateRunRequest = {
-        crew_id: crewId,
-        inputs: inputs,
+        objective,
+        inputs: {},
       };
       
       const run = await api.runs.create(request);
       setCurrentRunId(run.id);
-      setShowCrewPicker(false);
     } catch (err) {
       console.error('Failed to start run:', err);
       
@@ -77,13 +73,6 @@ export default function DashboardPage() {
     }
   };
 
-  // Legacy handler for simple topic input from ChatArea
-  // This uses the first available crew - in production, should prompt user to select
-  const handleSimpleStartRun = async (topic: string) => {
-    // Pass topic as a generic input - crew's inputSchema will validate
-    await handleStartRun('default', { topic });
-  };
-
   const errorCount = events.filter(e => e.type === 'error').length;
   const isRunning = isConnected && !isComplete;
 
@@ -91,31 +80,17 @@ export default function DashboardPage() {
     <>
       <ToastContainer toasts={toasts} onDismiss={dismissToast} />
       
-      {/* Crew Picker Modal */}
-      {showCrewPicker && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-xl shadow-2xl max-w-lg w-full max-h-[90vh] overflow-y-auto">
-            <CrewPicker
-              onStartRun={handleStartRun}
-              isRunning={isRunning}
-              onCancel={() => setShowCrewPicker(false)}
-            />
-          </div>
-        </div>
-      )}
-      
       <div className="h-full flex flex-col lg:flex-row">
         {/* Main chat area */}
         <div className="flex-1 min-w-0">
           <ChatArea 
-            onStartRun={handleSimpleStartRun}
-            onNewAnalysis={() => setShowCrewPicker(true)}
+            onStartRun={handleStartRun}
             isRunning={isRunning}
           />
         </div>
         
         {/* Agent activity panel */}
-        <div className="lg:w-96 border-t lg:border-t-0 lg:border-l border-gray-200 p-4 bg-gray-50">
+        <div className="lg:w-96 border-t lg:border-t-0 lg:border-l border-border p-4 bg-surface-muted">
           <AgentActivityFeed 
             events={events} 
             isLive={isRunning}
@@ -123,7 +98,7 @@ export default function DashboardPage() {
           />
           
           {error && !isConnected && (
-            <div className="mt-4 p-3 bg-red-100 border border-red-200 rounded-lg">
+            <div className="mt-4 p-3 bg-red-50 border border-red-200 rounded-lg">
               <div className="flex items-start gap-2">
                 <span className="text-red-500">❌</span>
                 <div>
@@ -135,13 +110,13 @@ export default function DashboardPage() {
           )}
           
             <div className="mt-4 grid grid-cols-2 gap-3">
-            <div className="bg-white rounded-lg p-4 border border-gray-200">
-              <div className="text-2xl font-bold text-gray-900">{toolCalls}</div>
-              <div className="text-xs text-gray-500">Tool Calls</div>
+            <div className="bg-surface rounded-lg p-4 border border-border">
+              <div className="text-2xl font-bold text-foreground">{toolCalls}</div>
+              <div className="text-xs text-muted-foreground">Tool Calls</div>
             </div>
-            <div className="bg-white rounded-lg p-4 border border-gray-200">
-              <div className="text-2xl font-bold text-gray-900">{agentMessages}</div>
-              <div className="text-xs text-gray-500">Agent Messages</div>
+            <div className="bg-surface rounded-lg p-4 border border-border">
+              <div className="text-2xl font-bold text-foreground">{agentMessages}</div>
+              <div className="text-xs text-muted-foreground">Agent Messages</div>
             </div>
           </div>
 
@@ -156,11 +131,11 @@ export default function DashboardPage() {
             </div>
           )}
           
-          <div className="mt-4 bg-white rounded-lg p-4 border border-gray-200">
-            <h4 className="text-sm font-semibold text-gray-900 mb-2">Current Run</h4>
+          <div className="mt-4 bg-surface rounded-lg p-4 border border-border">
+            <h4 className="text-sm font-semibold text-foreground mb-2">Current Run</h4>
             {currentRunId ? (
               <div className="space-y-2">
-                <p className="text-xs text-gray-500 font-mono break-all">{currentRunId}</p>
+                <p className="text-xs text-muted-foreground font-mono break-all">{currentRunId}</p>
                 <div className="flex items-center gap-2">
                   <span className={`w-2 h-2 rounded-full ${
                     isComplete ? (errorCount > 0 ? 'bg-yellow-500' : 'bg-green-500') : 
@@ -168,7 +143,7 @@ export default function DashboardPage() {
                     error ? 'bg-red-500' :
                     'bg-gray-400'
                   }`} />
-                  <span className="text-sm text-gray-600">
+                  <span className="text-sm text-muted-foreground">
                     {isComplete 
                       ? (errorCount > 0 ? 'Completed with errors' : 'Complete')
                       : isConnected 
@@ -180,8 +155,8 @@ export default function DashboardPage() {
                 </div>
               </div>
             ) : (
-              <p className="text-sm text-gray-500">
-                No active run. Click &quot;New Run&quot; to start.
+              <p className="text-sm text-muted-foreground">
+                No active workflow. Start by describing your goal in chat.
               </p>
             )}
           </div>

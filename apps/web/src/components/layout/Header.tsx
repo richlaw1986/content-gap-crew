@@ -25,13 +25,13 @@ export function Header() {
           href="/dashboard" 
           className="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors"
         >
-          Dashboard
+          Studio
         </Link>
         <Link 
           href="/dashboard/runs" 
           className="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors"
         >
-          Run History
+          History
         </Link>
       </nav>
 

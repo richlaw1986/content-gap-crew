@@ -69,13 +69,13 @@ export default function RegisterPage() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-50 py-12 px-4 sm:px-6 lg:px-8">
+    <div className="min-h-screen flex items-center justify-center bg-background py-12 px-4 sm:px-6 lg:px-8">
       <div className="max-w-md w-full space-y-8">
-        <div>
-          <h1 className="text-center text-3xl font-bold text-gray-900">
-            CrewAI Platform
+        <div className="text-center">
+          <h1 className="text-3xl font-semibold text-foreground">
+            Agent Studio
           </h1>
-          <h2 className="mt-2 text-center text-xl text-gray-600">
+          <h2 className="mt-2 text-base text-muted-foreground">
             Create your account
           </h2>
         </div>
@@ -86,10 +86,10 @@ export default function RegisterPage() {
           </div>
         )}
 
-        <form className="mt-8 space-y-6" onSubmit={handleRegister}>
+        <form className="mt-8 space-y-6 bg-surface border border-border rounded-2xl p-6 shadow-sm" onSubmit={handleRegister}>
           <div className="space-y-4">
             <div>
-              <label htmlFor="name" className="block text-sm font-medium text-gray-700">
+              <label htmlFor="name" className="block text-sm font-medium text-foreground">
                 Name (optional)
               </label>
               <input
@@ -99,13 +99,13 @@ export default function RegisterPage() {
                 autoComplete="name"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
-                className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                className="mt-1 block w-full px-3 py-2 border border-border rounded-lg bg-background text-foreground shadow-sm focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent"
                 placeholder="Your name"
               />
             </div>
 
             <div>
-              <label htmlFor="email" className="block text-sm font-medium text-gray-700">
+              <label htmlFor="email" className="block text-sm font-medium text-foreground">
                 Email address
               </label>
               <input
@@ -116,13 +116,13 @@ export default function RegisterPage() {
                 required
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                className="mt-1 block w-full px-3 py-2 border border-border rounded-lg bg-background text-foreground shadow-sm focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent"
                 placeholder="you@example.com"
               />
             </div>
 
             <div>
-              <label htmlFor="password" className="block text-sm font-medium text-gray-700">
+              <label htmlFor="password" className="block text-sm font-medium text-foreground">
                 Password
               </label>
               <input
@@ -133,14 +133,14 @@ export default function RegisterPage() {
                 required
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                className="mt-1 block w-full px-3 py-2 border border-border rounded-lg bg-background text-foreground shadow-sm focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent"
                 placeholder="••••••••"
               />
-              <p className="mt-1 text-xs text-gray-500">At least 8 characters</p>
+              <p className="mt-1 text-xs text-muted-foreground">At least 8 characters</p>
             </div>
 
             <div>
-              <label htmlFor="confirmPassword" className="block text-sm font-medium text-gray-700">
+              <label htmlFor="confirmPassword" className="block text-sm font-medium text-foreground">
                 Confirm password
               </label>
               <input
@@ -151,7 +151,7 @@ export default function RegisterPage() {
                 required
                 value={confirmPassword}
                 onChange={(e) => setConfirmPassword(e.target.value)}
-                className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                className="mt-1 block w-full px-3 py-2 border border-border rounded-lg bg-background text-foreground shadow-sm focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent"
                 placeholder="••••••••"
               />
             </div>
@@ -169,10 +169,10 @@ export default function RegisterPage() {
 
         <div className="relative">
           <div className="absolute inset-0 flex items-center">
-            <div className="w-full border-t border-gray-300" />
+            <div className="w-full border-t border-border" />
           </div>
           <div className="relative flex justify-center text-sm">
-            <span className="px-2 bg-gray-50 text-gray-500">Or continue with</span>
+            <span className="px-2 bg-background text-muted-foreground">Or continue with</span>
           </div>
         </div>
 
@@ -203,9 +203,9 @@ export default function RegisterPage() {
           Sign up with Google
         </Button>
 
-        <p className="text-center text-sm text-gray-600">
+        <p className="text-center text-sm text-muted-foreground">
           Already have an account?{' '}
-          <Link href="/login" className="font-medium text-blue-600 hover:text-blue-500">
+          <Link href="/login" className="font-medium text-accent hover:opacity-80">
             Sign in
           </Link>
         </p>

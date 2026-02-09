@@ -47,14 +47,14 @@ function LoginForm() {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-50 py-12 px-4 sm:px-6 lg:px-8">
+    <div className="min-h-screen flex items-center justify-center bg-background py-12 px-4 sm:px-6 lg:px-8">
       <div className="max-w-md w-full space-y-8">
-        <div>
-          <h1 className="text-center text-3xl font-bold text-gray-900">
-            CrewAI Platform
+        <div className="text-center">
+          <h1 className="text-3xl font-semibold text-foreground">
+            Agent Studio
           </h1>
-          <h2 className="mt-2 text-center text-xl text-gray-600">
-            Sign in to your account
+          <h2 className="mt-2 text-base text-muted-foreground">
+            Sign in to continue
           </h2>
         </div>
 
@@ -64,10 +64,10 @@ function LoginForm() {
           </div>
         )}
 
-        <form className="mt-8 space-y-6" onSubmit={handleCredentialsLogin}>
+        <form className="mt-8 space-y-6 bg-surface border border-border rounded-2xl p-6 shadow-sm" onSubmit={handleCredentialsLogin}>
           <div className="space-y-4">
             <div>
-              <label htmlFor="email" className="block text-sm font-medium text-gray-700">
+              <label htmlFor="email" className="block text-sm font-medium text-foreground">
                 Email address
               </label>
               <input
@@ -78,13 +78,13 @@ function LoginForm() {
                 required
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                className="mt-1 block w-full px-3 py-2 border border-border rounded-lg bg-background text-foreground shadow-sm focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent"
                 placeholder="you@example.com"
               />
             </div>
 
             <div>
-              <label htmlFor="password" className="block text-sm font-medium text-gray-700">
+              <label htmlFor="password" className="block text-sm font-medium text-foreground">
                 Password
               </label>
               <input
@@ -95,7 +95,7 @@ function LoginForm() {
                 required
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                className="mt-1 block w-full px-3 py-2 border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                className="mt-1 block w-full px-3 py-2 border border-border rounded-lg bg-background text-foreground shadow-sm focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent"
                 placeholder="••••••••"
               />
             </div>
@@ -113,10 +113,10 @@ function LoginForm() {
 
         <div className="relative">
           <div className="absolute inset-0 flex items-center">
-            <div className="w-full border-t border-gray-300" />
+            <div className="w-full border-t border-border" />
           </div>
           <div className="relative flex justify-center text-sm">
-            <span className="px-2 bg-gray-50 text-gray-500">Or continue with</span>
+            <span className="px-2 bg-background text-muted-foreground">Or continue with</span>
           </div>
         </div>
 
@@ -147,9 +147,9 @@ function LoginForm() {
           Sign in with Google
         </Button>
 
-        <p className="text-center text-sm text-gray-600">
+        <p className="text-center text-sm text-muted-foreground">
           Don&apos;t have an account?{' '}
-          <Link href="/register" className="font-medium text-blue-600 hover:text-blue-500">
+          <Link href="/register" className="font-medium text-accent hover:opacity-80">
             Create one
           </Link>
         </p>
@@ -161,8 +161,8 @@ function LoginForm() {
 export default function LoginPage() {
   return (
     <Suspense fallback={
-      <div className="min-h-screen flex items-center justify-center bg-gray-50">
-        <div className="text-gray-500">Loading...</div>
+      <div className="min-h-screen flex items-center justify-center bg-background">
+        <div className="text-muted-foreground">Loading...</div>
       </div>
     }>
       <LoginForm />

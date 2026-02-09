@@ -2,7 +2,7 @@
 
 from typing import Any
 
-from crewai_tools import tool
+from crewai.tools import tool
 
 from app.services.sanity import get_sanity_client
 
