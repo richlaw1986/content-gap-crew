@@ -8,7 +8,7 @@ export default defineConfig({
   title: 'Content Gap Crew',
 
   // TODO: Replace with actual project ID and dataset
-  projectId: process.env.SANITY_STUDIO_PROJECT_ID || 'your-project-id',
+  projectId: process.env.SANITY_STUDIO_PROJECT_ID || 'lxn44moi',
   dataset: process.env.SANITY_STUDIO_DATASET || 'production',
 
   plugins: [
