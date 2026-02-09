@@ -21,8 +21,76 @@ export default defineType({
       title: 'Crew',
       type: 'reference',
       to: [{type: 'crew'}],
-      description: 'The crew configuration used for this run',
-      validation: (Rule) => Rule.required(),
+      description: 'The crew configuration used for this run (optional for planned runs)',
+    }),
+    defineField({
+      name: 'planner',
+      title: 'Planner',
+      type: 'reference',
+      to: [{type: 'crewPlanner'}],
+      description: 'Planner configuration used to assemble a dynamic crew',
+    }),
+    defineField({
+      name: 'plannedCrew',
+      title: 'Planned Crew',
+      type: 'object',
+      description: 'Planner-selected crew details for dynamic runs',
+      fields: [
+        defineField({
+          name: 'agents',
+          title: 'Agents',
+          type: 'array',
+          of: [{type: 'reference', to: [{type: 'agent'}]}],
+        }),
+        defineField({
+          name: 'tasks',
+          title: 'Tasks',
+          type: 'array',
+          of: [
+            {
+              type: 'object',
+              fields: [
+                {name: 'name', title: 'Name', type: 'string'},
+                {name: 'description', title: 'Description', type: 'text'},
+                {name: 'expectedOutput', title: 'Expected Output', type: 'text'},
+                {name: 'agent', title: 'Agent', type: 'reference', to: [{type: 'agent'}]},
+                {name: 'order', title: 'Order', type: 'number'},
+              ],
+            },
+          ],
+        }),
+        defineField({
+          name: 'process',
+          title: 'Process',
+          type: 'string',
+          options: {
+            list: [
+              {title: 'Sequential', value: 'sequential'},
+              {title: 'Hierarchical', value: 'hierarchical'},
+            ],
+          },
+        }),
+        defineField({
+          name: 'inputSchema',
+          title: 'Input Schema',
+          type: 'array',
+          of: [
+            {
+              type: 'object',
+              fields: [
+                {name: 'name', title: 'Field Name', type: 'string'},
+                {name: 'label', title: 'Display Label', type: 'string'},
+                {name: 'type', title: 'Field Type', type: 'string'},
+                {name: 'required', title: 'Required', type: 'boolean'},
+                {name: 'placeholder', title: 'Placeholder', type: 'string'},
+                {name: 'helpText', title: 'Help Text', type: 'string'},
+                {name: 'defaultValue', title: 'Default Value', type: 'string'},
+                {name: 'options', title: 'Options', type: 'array', of: [{type: 'string'}]},
+              ],
+            },
+          ],
+        }),
+      ],
     }),
     defineField({
       name: 'status',

@@ -10,6 +10,27 @@ from app.models import Agent, Crew, InputField, Run, RunInputs, Tool
 
 logger = get_logger(__name__)
 
+LLM_MODELS = {
+    "gpt-5.3-codex",
+    "gpt-5.2",
+    "gpt-5.2-mini",
+    "gpt-5.2-nano",
+    "gpt-4.1",
+    "gpt-4.1-mini",
+    "gpt-4.1-nano",
+    "gpt-4o",
+    "gpt-4o-mini",
+    "o1",
+    "o1-mini",
+    "claude-opus-4.6",
+    "claude-opus-4.5",
+    "claude-sonnet-4",
+    "claude-3-7-sonnet-20250219",
+    "claude-3-5-sonnet-20241022",
+    "claude-3-5-haiku-20241022",
+    "claude-3-opus-20240229",
+}
+
 
 class SanityClient:
     """Real Sanity client for production use."""
@@ -71,8 +92,25 @@ class SanityClient:
             _id,
             name,
             role,
-            llmTier,
+            llmModel,
             "toolCount": count(tools)
+        }"""
+        return await self._query(query) or []
+
+    async def list_agents_full(self) -> list[dict[str, Any]]:
+        query = """*[_type == "agent"] {
+            _id,
+            name,
+            role,
+            goal,
+            backstory,
+            llmModel,
+            tools[]->{
+                _id,
+                name,
+                description,
+                credentialTypes
+            }
         }"""
         return await self._query(query) or []
 
@@ -83,7 +121,7 @@ class SanityClient:
             role,
             goal,
             backstory,
-            llmTier,
+            llmModel,
             tools[]->
         }"""
         result = await self._query(query, {"id": agent_id})
@@ -105,7 +143,7 @@ class SanityClient:
                 role,
                 goal,
                 backstory,
-                llmTier,
+                llmModel,
                 tools[]->
             },
             tasks[]->{
@@ -134,7 +172,7 @@ class SanityClient:
                 role,
                 goal,
                 backstory,
-                llmTier,
+                llmModel,
                 tools[]->{
                     _id,
                     name,
@@ -199,6 +237,7 @@ class SanityClient:
             crew->{_id, name, slug},
             inputs,
             output,
+            plannedCrew,
             taskResults,
             startedAt,
             completedAt,
@@ -208,6 +247,75 @@ class SanityClient:
         if result:
             return Run(**result)
         return None
+
+    async def get_planner(self) -> dict[str, Any] | None:
+        query = """*[_type == "crewPlanner" && enabled == true][0] {
+            _id,
+            name,
+            model,
+            systemPrompt,
+            maxAgents,
+            process,
+            usePlannerByDefault
+        }"""
+        return await self._query(query)
+
+    async def get_memory_policy(self) -> dict[str, Any] | None:
+        query = """*[_type == "memoryPolicy" && enabled == true][0] {
+            _id,
+            name,
+            agent->{
+                _id,
+                name,
+                role,
+                backstory
+            }
+        }"""
+        return await self._query(query)
+
+    async def search_skills(
+        self,
+        query: str | None = None,
+        tags: list[str] | None = None,
+        limit: int = 10,
+    ) -> list[dict[str, Any]]:
+        filters = ['_type == "skill"', "enabled == true"]
+        if query:
+            filters.append(
+                'name match $q || description match $q || $q in tags'
+            )
+        if tags:
+            filters.append('count(tags[@ in $tags]) > 0')
+
+        groq = f"""*[{ ' && '.join(filters) }] | order(_updatedAt desc) [0...$limit] {{
+            _id,
+            name,
+            description,
+            steps,
+            tags,
+            toolsRequired,
+            inputSchema,
+            outputSchema
+        }}"""
+
+        params = {"limit": limit}
+        if query:
+            params["q"] = f"*{query}*"
+        if tags:
+            params["tags"] = tags
+
+        return await self._query(groq, params) or []
+
+    async def list_mcp_servers(self) -> list[dict[str, Any]]:
+        query = """*[_type == "mcpServer" && enabled == true] {
+            _id,
+            name,
+            displayName,
+            description,
+            transport,
+            tools
+        }"""
+        return await self._query(query) or []
 
     async def create_run(self, crew_id: str, inputs: dict[str, Any], triggered_by: str | None = None) -> str:
         """Create a new run document in Sanity."""
@@ -245,11 +353,33 @@ class StubSanityClient:
 
     async def list_agents(self) -> list[dict[str, Any]]:
         return [
-            {"_id": "agent-1", "name": "data_analyst", "role": "Data Analyst", "llmTier": "default", "toolCount": 11},
-            {"_id": "agent-2", "name": "product_marketer", "role": "Product Marketing Manager", "llmTier": "default", "toolCount": 8},
-            {"_id": "agent-3", "name": "seo_specialist", "role": "SEO & AEO Specialist", "llmTier": "default", "toolCount": 11},
-            {"_id": "agent-4", "name": "work_reviewer", "role": "Content Gap Validator", "llmTier": "smart", "toolCount": 5},
-            {"_id": "agent-5", "name": "narrative_governor", "role": "Narrative Governor", "llmTier": "smart", "toolCount": 0},
+            {"_id": "agent-1", "name": "data_analyst", "role": "Data Analyst", "llmModel": "gpt-5.2", "toolCount": 11},
+            {"_id": "agent-2", "name": "product_marketer", "role": "Product Marketing Manager", "llmModel": "gpt-5.2", "toolCount": 8},
+            {"_id": "agent-3", "name": "seo_specialist", "role": "SEO & AEO Specialist", "llmModel": "gpt-5.2", "toolCount": 11},
+            {"_id": "agent-4", "name": "work_reviewer", "role": "Content Gap Validator", "llmModel": "gpt-5.2", "toolCount": 5},
+            {"_id": "agent-5", "name": "narrative_governor", "role": "Narrative Governor", "llmModel": "gpt-5.2", "toolCount": 0},
+        ]
+
+    async def list_agents_full(self) -> list[dict[str, Any]]:
+        return [
+            {
+                "_id": "agent-1",
+                "name": "data_analyst",
+                "role": "Data Analyst",
+                "goal": "Analyze content gaps",
+                "backstory": "Expert analyst",
+                "llmModel": "gpt-5.2",
+                "tools": [],
+            },
+            {
+                "_id": "agent-2",
+                "name": "product_marketer",
+                "role": "Product Marketing Manager",
+                "goal": "Analyze content gaps",
+                "backstory": "Expert marketer",
+                "llmModel": "gpt-5.2",
+                "tools": [],
+            },
         ]
 
     async def get_agent(self, agent_id: str) -> Agent | None:
@@ -310,6 +440,71 @@ class StubSanityClient:
             status="pending",
             inputs=RunInputs(topic="AI content management"),
         )
+
+    async def get_planner(self) -> dict[str, Any] | None:
+        return {
+            "_id": "crew-planner-default",
+            "name": "Default Crew Planner",
+            "model": "gpt-5.2",
+            "systemPrompt": "Return a JSON plan with agents, tasks, process, and inputSchema.",
+            "maxAgents": 6,
+            "process": "sequential",
+            "usePlannerByDefault": True,
+        }
+
+    async def get_memory_policy(self) -> dict[str, Any] | None:
+        return {
+            "_id": "memory-policy-default",
+            "name": "Default Memory Policy",
+            "agent": {
+                "_id": "agent-narrative-governor",
+                "name": "Narrative Governor",
+                "role": "Content Strategy Director",
+                "backstory": (
+                    "Summarize prior outputs and remove non-salient details. "
+                    "Preserve key decisions, assumptions, and open questions."
+                ),
+            },
+        }
+
+    async def search_skills(
+        self,
+        query: str | None = None,
+        tags: list[str] | None = None,
+        limit: int = 10,
+    ) -> list[dict[str, Any]]:
+        return [
+            {
+                "_id": "skill-eeat-audit",
+                "name": "EEAT Audit",
+                "description": "Assess content quality using EEAT.",
+                "steps": [
+                    "Identify author and credentials",
+                    "Check first-hand experience signals",
+                    "Verify sources and citations",
+                    "Score trustworthiness",
+                    "Summarize findings and recommendations",
+                ],
+                "tags": ["seo", "eeat", "content-quality", "trust"],
+                "toolsRequired": ["fetch_webpage_content", "sanity_sitemap_lookup"],
+                "inputSchema": [
+                    {"name": "url", "label": "URL", "type": "string", "required": True},
+                ],
+                "outputSchema": "EEAT score and recommendations",
+            }
+        ]
+
+    async def list_mcp_servers(self) -> list[dict[str, Any]]:
+        return [
+            {
+                "_id": "mcp-demo",
+                "name": "demo_mcp",
+                "displayName": "Demo MCP",
+                "description": "Example MCP server",
+                "transport": "http",
+                "tools": ["demo_tool"],
+            }
+        ]
 
     async def create_run(self, crew_id: str, inputs: dict[str, Any], triggered_by: str | None = None) -> str:
         import uuid

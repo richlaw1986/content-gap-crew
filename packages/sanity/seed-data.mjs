@@ -84,6 +84,11 @@ const tools = [
   },
 ]
 
+const SKILL_INSTRUCTION =
+  'Before starting any task, use the search_skills tool to find relevant skills. ' +
+  'If a skill applies, follow its steps and reflect that in your output. ' +
+  'If you are unsure which tools are available, call list_available_tools.\n\n'
+
 // Create agents
 const agents = [
   {
@@ -92,8 +97,8 @@ const agents = [
     name: 'Data Analyst',
     role: 'Senior Data Analyst',
     goal: 'Analyze BigQuery LLM visit data and GSC performance to identify content opportunities',
-    backstory: 'Expert in data analysis with deep knowledge of SEO metrics and LLM traffic patterns. Skilled at finding insights in large datasets.',
-    llmTier: 'default',
+    backstory: SKILL_INSTRUCTION + 'Expert in data analysis with deep knowledge of SEO metrics and LLM traffic patterns. Skilled at finding insights in large datasets.',
+    llmModel: 'gpt-5.2',
     verbose: true,
     allowDelegation: false,
     tools: [
@@ -107,8 +112,8 @@ const agents = [
     name: 'Product Marketer',
     role: 'Senior Product Marketing Manager',
     goal: 'Identify content gaps and competitive positioning opportunities',
-    backstory: 'Experienced product marketer who understands how to position technical products. Expert at competitive analysis and messaging.',
-    llmTier: 'default',
+    backstory: SKILL_INSTRUCTION + 'Experienced product marketer who understands how to position technical products. Expert at competitive analysis and messaging.',
+    llmModel: 'gpt-5.2',
     verbose: true,
     allowDelegation: false,
     tools: [
@@ -123,8 +128,8 @@ const agents = [
     name: 'SEO Specialist',
     role: 'Technical SEO Specialist',
     goal: 'Optimize content strategy for search visibility and AEO (Answer Engine Optimization)',
-    backstory: 'SEO expert with focus on technical optimization and emerging AI search patterns. Understands both traditional SEO and LLM optimization.',
-    llmTier: 'default',
+    backstory: SKILL_INSTRUCTION + 'SEO expert with focus on technical optimization and emerging AI search patterns. Understands both traditional SEO and LLM optimization.',
+    llmModel: 'gpt-5.2',
     verbose: true,
     allowDelegation: false,
     tools: [
@@ -139,8 +144,8 @@ const agents = [
     name: 'Work Reviewer',
     role: 'Quality Assurance Reviewer',
     goal: 'Review and validate analysis quality, ensure actionable recommendations',
-    backstory: 'Meticulous reviewer who ensures all analysis is accurate, well-supported, and actionable. Catches gaps and inconsistencies.',
-    llmTier: 'smart',
+    backstory: SKILL_INSTRUCTION + 'Meticulous reviewer who ensures all analysis is accurate, well-supported, and actionable. Catches gaps and inconsistencies.',
+    llmModel: 'gpt-5.2',
     verbose: true,
     allowDelegation: false,
     tools: [
@@ -153,8 +158,8 @@ const agents = [
     name: 'Narrative Governor',
     role: 'Content Strategy Director',
     goal: 'Synthesize findings into coherent content strategy with prioritized recommendations',
-    backstory: 'Senior content strategist who excels at turning data into narrative. Creates compelling, actionable content roadmaps.',
-    llmTier: 'smart',
+    backstory: SKILL_INSTRUCTION + 'Senior content strategist who excels at turning data into narrative. Creates compelling, actionable content roadmaps.',
+    llmModel: 'gpt-5.2',
     verbose: true,
     allowDelegation: true,
     tools: [],
@@ -263,6 +268,77 @@ const crew = {
   ],
 }
 
+const crewPlanner = {
+  _id: 'crew-planner-default',
+  _type: 'crewPlanner',
+  name: 'Default Crew Planner',
+  enabled: true,
+  usePlannerByDefault: true,
+  model: 'gpt-5.2',
+  maxAgents: 6,
+  process: 'sequential',
+  systemPrompt: `You are a crew planner.
+You receive: objective, inputs, and a list of agents with backstories + tools.
+Return a JSON object with:
+- agents: array of agent ids to use
+- tasks: array of {name, description, expectedOutput, agentId, order}
+- process: "sequential" or "hierarchical"
+- inputSchema: array of {name,label,type,required,placeholder,helpText,defaultValue,options}
+Only use provided agent ids. Choose agents based on backstory and tools.`,
+}
+
+const memoryPolicy = {
+  _id: 'memory-policy-default',
+  _type: 'memoryPolicy',
+  name: 'Default Memory Policy',
+  enabled: true,
+  agent: {_type: 'reference', _ref: 'agent-narrative-governor'},
+}
+
+const skills = [
+  {
+    _id: 'skill-eeat-audit',
+    _type: 'skill',
+    name: 'EEAT Audit',
+    description: 'Assess content quality using EEAT (Experience, Expertise, Authoritativeness, Trustworthiness).',
+    steps: [
+      'Identify author and credentials',
+      'Check first-hand experience signals',
+      'Verify sources and citations',
+      'Score trustworthiness',
+      'Summarize findings and recommendations',
+    ],
+    tags: ['seo', 'eeat', 'content-quality', 'trust'],
+    toolsRequired: ['fetch_webpage_content', 'sanity_sitemap_lookup'],
+    inputSchema: [
+      {name: 'url', label: 'URL', type: 'string', required: true, placeholder: 'https://example.com'},
+    ],
+    outputSchema: 'EEAT score and recommendations',
+    enabled: true,
+  },
+  {
+    _id: 'skill-competitive-gap',
+    _type: 'skill',
+    name: 'Competitive Content Gap',
+    description: 'Identify content topics competitors cover that we do not.',
+    steps: [
+      'List competitors and target topic',
+      'Fetch competitor content pages',
+      'Compare to Sanity sitemap coverage',
+      'Rank gaps by impact',
+      'Recommend new content',
+    ],
+    tags: ['competitive', 'content-gap', 'seo'],
+    toolsRequired: ['fetch_webpage_content', 'sanity_sitemap_lookup'],
+    inputSchema: [
+      {name: 'topic', label: 'Topic', type: 'string', required: true},
+      {name: 'competitors', label: 'Competitors', type: 'array', required: false},
+    ],
+    outputSchema: 'Ranked list of content gaps',
+    enabled: true,
+  },
+]
+
 async function seed() {
   console.log('Creating tools...')
   for (const tool of tools) {
@@ -285,6 +361,20 @@ async function seed() {
   console.log('Creating crew...')
   await client.createOrReplace(crew)
   console.log(`  ✓ ${crew.name}`)
+
+  console.log('Creating memory policy...')
+  await client.createOrReplace(memoryPolicy)
+  console.log(`  ✓ ${memoryPolicy.name}`)
+
+  console.log('Creating skills...')
+  for (const skill of skills) {
+    await client.createOrReplace(skill)
+    console.log(`  ✓ ${skill.name}`)
+  }
+
+  console.log('Creating crew planner...')
+  await client.createOrReplace(crewPlanner)
+  console.log(`  ✓ ${crewPlanner.name}`)
 
   console.log('\n✅ Seed data created successfully!')
 }

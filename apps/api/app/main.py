@@ -25,6 +25,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     logger = get_logger(__name__)
     
     app.state.sanity = get_sanity_client()
+    app.state.planned_runs = {}
     
     logger.info(
         f"Starting Content Gap Crew API",

@@ -3,7 +3,7 @@
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import AliasChoices, BaseModel, Field
 
 
 class Tool(BaseModel):
@@ -27,7 +27,11 @@ class Agent(BaseModel):
     goal: str = ""
     backstory: str = ""
     tools: list[Tool] = Field(default_factory=list)
-    llm_tier: str = Field(alias="llmTier", default="default")
+    llm_model: str = Field(
+        alias="llmModel",
+        validation_alias=AliasChoices("llmModel", "llmTier"),
+        default="gpt-5.2",
+    )
     verbose: bool = True
 
     class Config:
@@ -41,6 +45,8 @@ class Task(BaseModel):
     description: str = ""
     expected_output: str = Field(alias="expectedOutput", default="")
     order: int = 0
+    agent: dict | None = None
+    context_tasks: list[dict] = Field(alias="contextTasks", default_factory=list)
 
     class Config:
         populate_by_name = True
@@ -72,6 +78,8 @@ class Crew(BaseModel):
     tasks: list[Task] = Field(default_factory=list)
     input_schema: list[InputField] = Field(alias="inputSchema", default_factory=list)
     process: str = "sequential"
+    memory_enabled: bool = Field(alias="memory", default=False)
+    credentials: list["Credential"] = Field(default_factory=list)
     verbose: bool = True
 
     class Config:
@@ -88,6 +96,7 @@ class Run(BaseModel):
     """Run document from Sanity."""
     id: str = Field(alias="_id")
     crew_id: str = Field(alias="crew", default="")
+    planned_crew: dict | None = Field(alias="plannedCrew", default=None)
     status: str = "pending"
     started_at: datetime | None = Field(alias="startedAt", default=None)
     completed_at: datetime | None = Field(alias="completedAt", default=None)
@@ -96,3 +105,41 @@ class Run(BaseModel):
 
     class Config:
         populate_by_name = True
+
+
+class Credential(BaseModel):
+    """Credential document from Sanity."""
+    id: str = Field(alias="_id", default="")
+    name: str | None = None
+    type: str = ""
+
+    model_config = {"extra": "allow", "populate_by_name": True}
+
+
+class MemoryPolicy(BaseModel):
+    """Memory policy document from Sanity."""
+    id: str = Field(alias="_id", default="")
+    name: str | None = None
+    enabled: bool = True
+    agent: dict | None = None
+
+    model_config = {"extra": "allow", "populate_by_name": True}
+
+
+class Skill(BaseModel):
+    """Skill document from Sanity."""
+    id: str = Field(alias="_id")
+    name: str
+    description: str = ""
+    steps: list[str] = Field(default_factory=list)
+    tags: list[str] = Field(default_factory=list)
+    tools_required: list[str] = Field(alias="toolsRequired", default_factory=list)
+    input_schema: list[InputField] = Field(alias="inputSchema", default_factory=list)
+    output_schema: str | None = Field(alias="outputSchema", default=None)
+    enabled: bool = True
+
+    class Config:
+        populate_by_name = True
+
+
+Crew.model_rebuild()

@@ -18,6 +18,8 @@ from app.tools.google_ads import google_ads_keyword_ideas
 from app.tools.gsc import gsc_performance_lookup
 from app.tools.openai_tools import openai_query_fanout
 from app.tools.reddit import reddit_discussion_lookup
+from app.tools.skills import search_skills
+from app.tools.tools_catalog import list_available_tools
 from app.tools.sitemap import sanity_content_audit, sanity_sitemap_lookup
 from app.tools.web import (
     competitor_content_gaps,
@@ -39,6 +41,10 @@ ALL_TOOLS = [
     competitor_content_gaps,
     # OpenAI
     openai_query_fanout,
+    # Skills
+    search_skills,
+    # Tools catalog
+    list_available_tools,
     # Reddit
     reddit_discussion_lookup,
     # BigQuery
@@ -49,6 +55,10 @@ ALL_TOOLS = [
     gsc_performance_lookup,
     # Google Ads
     google_ads_keyword_ideas,
+    # Skills
+    search_skills,
+    # Tools catalog
+    list_available_tools,
 ]
 
 # Tool name to function mapping
@@ -64,12 +74,14 @@ TOOLS_BY_CREDENTIAL = {
         "top_google_search_pages",
         "top_aeo_pages",
         "competitor_content_gaps",
+        "list_available_tools",
     ],
     "openai": ["openai_query_fanout"],
     "reddit": ["reddit_discussion_lookup"],
     "bigquery": ["bigquery_describe_table", "bigquery_llm_visits", "bigquery_custom_query"],
     "gsc": ["gsc_performance_lookup"],
     "google_ads": ["google_ads_keyword_ideas"],
+    "sanity": ["search_skills"],
 }
 
 __all__ = [
@@ -88,6 +100,10 @@ __all__ = [
     "competitor_content_gaps",
     # OpenAI tools
     "openai_query_fanout",
+    # Skills
+    "search_skills",
+    # Tools catalog
+    "list_available_tools",
     # Reddit tools
     "reddit_discussion_lookup",
     # BigQuery tools

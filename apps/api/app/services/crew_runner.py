@@ -14,7 +14,7 @@ from app.tools import TOOL_REGISTRY, CredentialError
 class CrewRunner:
     """Runs CrewAI crews with dynamic assembly from Sanity configs."""
 
-    def __init__(self, crew_config: CrewModel):
+    def __init__(self, crew_config: CrewModel, memory_policy: dict[str, Any] | None = None):
         """Initialize the runner with a crew configuration.
         
         Args:
@@ -23,6 +23,7 @@ class CrewRunner:
         self.config = crew_config
         self.settings = get_settings()
         self._credentials_by_type: dict[str, dict[str, Any]] = {}
+        self._memory_policy = memory_policy or {}
         self._setup_credentials()
 
     def _setup_credentials(self) -> None:
@@ -31,29 +32,34 @@ class CrewRunner:
             cred_dict = cred.model_dump(by_alias=True)
             self._credentials_by_type[cred.type] = cred_dict
 
-    def _get_llm(self, tier: str):
-        """Get the LLM instance for a given tier.
-        
-        Args:
-            tier: 'default', 'smart', or 'fast'
-            
-        Returns:
-            LangChain ChatAnthropic instance
-        """
+    def _get_llm(self, model_name: str | None):
+        """Get the LLM instance for a given model name."""
         from langchain_anthropic import ChatAnthropic
-        
-        model_map = {
-            "default": self.settings.default_llm_model,
-            "smart": self.settings.smart_llm_model,
-            "fast": self.settings.fast_llm_model,
+        from langchain_openai import ChatOpenAI
+
+        model = model_name or self.settings.default_llm_model
+
+        anthropic_prefixes = ("claude-",)
+        anthropic_models = {
+            "claude-opus-4-20250514",
+            "claude-sonnet-4-20250514",
+            "claude-3-7-sonnet-20250219",
+            "claude-3-5-sonnet-20241022",
+            "claude-3-5-haiku-20241022",
+            "claude-3-opus-20240229",
         }
-        
-        model = model_map.get(tier, self.settings.default_llm_model)
-        
-        return ChatAnthropic(
+
+        if model in anthropic_models or model.startswith(anthropic_prefixes):
+            return ChatAnthropic(
+                model=model,
+                temperature=0.7,
+                anthropic_api_key=self.settings.anthropic_api_key,
+            )
+
+        return ChatOpenAI(
             model=model,
             temperature=0.7,
-            anthropic_api_key=self.settings.anthropic_api_key,
+            api_key=self.settings.openai_api_key,
         )
 
     def _build_tool(self, tool_config: dict[str, Any]) -> Any:
@@ -119,14 +125,14 @@ class CrewRunner:
                     # Log but continue - agent can work with fewer tools
                     print(f"Warning: Could not build tool {tool_config.get('name')}: {e}")
         
-        llm_tier = agent_config.get("llmTier", "default")
+        llm_model = agent_config.get("llmModel") or agent_config.get("llmTier")
         
         return Agent(
             role=agent_config.get("role", ""),
             goal=agent_config.get("goal", ""),
             backstory=agent_config.get("backstory", ""),
             tools=tools,
-            llm=self._get_llm(llm_tier),
+            llm=self._get_llm(llm_model),
             verbose=agent_config.get("verbose", True),
             allow_delegation=agent_config.get("allowDelegation", False),
         )
@@ -166,6 +172,46 @@ class CrewRunner:
             context=context if context else None,
         )
 
+    def _inject_memory_tasks(
+        self,
+        tasks: list[dict[str, Any]],
+        memory_agent_id: str | None,
+        memory_prompt: str | None,
+    ) -> list[dict[str, Any]]:
+        if not memory_agent_id:
+            return tasks
+
+        prompt = memory_prompt or (
+            "Summarize prior outputs and remove non-salient details. "
+            "Preserve key decisions, assumptions, and open questions."
+        )
+
+        injected: list[dict[str, Any]] = []
+        order = 1
+        for task in sorted(tasks, key=lambda t: t.get("order", 0)):
+            summary_id = f"task-memory-{order}"
+            injected.append(
+                {
+                    "_id": summary_id,
+                    "name": "Memory Summary",
+                    "description": f"{prompt}\n\nSummarize context for: {task.get('name') or 'next task'}",
+                    "expectedOutput": "Concise summary of relevant context for the next task.",
+                    "agent": {"_id": memory_agent_id},
+                    "order": order,
+                    "contextTasks": [],
+                }
+            )
+            order += 1
+
+            task_with_context = {**task}
+            existing_context = task_with_context.get("contextTasks", [])
+            task_with_context["contextTasks"] = existing_context + [{"_id": summary_id}]
+            task_with_context["order"] = order
+            injected.append(task_with_context)
+            order += 1
+
+        return injected
+
     def build_crew(self) -> Crew:
         """Build the complete CrewAI Crew from config.
         
@@ -187,12 +233,27 @@ class CrewRunner:
         tasks_list: list[Task] = []
         
         # Sort tasks by order
-        sorted_tasks = sorted(self.config.tasks, key=lambda t: t.order)
+        memory_agent_ref = self._memory_policy.get("agent") or {}
+        memory_agent_id = None
+        memory_prompt = None
+        if isinstance(memory_agent_ref, dict):
+            memory_agent_id = memory_agent_ref.get("_id") or memory_agent_ref.get("_ref")
+            memory_prompt = memory_agent_ref.get("backstory")
+
+        raw_tasks = [t.model_dump(by_alias=True) for t in self.config.tasks]
+        injected_tasks = self._inject_memory_tasks(
+            raw_tasks,
+            memory_agent_id,
+            memory_prompt,
+        )
+        sorted_tasks = sorted(injected_tasks, key=lambda t: t.get("order", 0))
         
         for task_config in sorted_tasks:
-            task_dict = task_config.model_dump(by_alias=True)
+            task_dict = task_config
             task = self._build_task(task_dict, agents_by_id, tasks_by_id)
-            tasks_by_id[task_config.id] = task
+            task_id = task_dict.get("_id")
+            if task_id:
+                tasks_by_id[task_id] = task
             tasks_list.append(task)
         
         # Determine process type

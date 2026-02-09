@@ -41,8 +41,8 @@ export function Sidebar({ onNewRun, selectedRunId, onSelectRun }: SidebarProps) 
   };
 
   return (
-    <aside className="w-64 border-r border-gray-200 bg-gray-50 flex flex-col">
-      <div className="p-4 border-b border-gray-200">
+    <aside className="w-64 border-r border-border bg-surface flex flex-col">
+      <div className="p-4 border-b border-border">
         <Button 
           variant="primary" 
           className="w-full"
@@ -54,7 +54,7 @@ export function Sidebar({ onNewRun, selectedRunId, onSelectRun }: SidebarProps) 
 
       <div className="flex-1 overflow-y-auto">
         <div className="p-4">
-          <h3 className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-3">
+          <h3 className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-3">
             Recent Runs
           </h3>
           <ul className="space-y-2">
@@ -64,17 +64,17 @@ export function Sidebar({ onNewRun, selectedRunId, onSelectRun }: SidebarProps) 
                   onClick={() => onSelectRun?.(run.id)}
                   className={`w-full text-left p-3 rounded-lg transition-colors ${
                     selectedRunId === run.id 
-                      ? 'bg-blue-100 border border-blue-200' 
-                      : 'hover:bg-gray-100'
+                      ? 'bg-surface-muted border border-border' 
+                      : 'hover:bg-surface-muted'
                   }`}
                 >
                   <div className="flex items-center gap-2 mb-1">
                     <span className={`w-2 h-2 rounded-full ${getStatusColor(run.status)}`} />
-                    <span className="text-sm font-medium text-gray-900 truncate">
+                    <span className="text-sm font-medium text-foreground truncate">
                       {run.title}
                     </span>
                   </div>
-                  <span className="text-xs text-gray-500">
+                  <span className="text-xs text-muted-foreground">
                     {formatDate(run.createdAt)}
                   </span>
                 </button>
@@ -84,8 +84,8 @@ export function Sidebar({ onNewRun, selectedRunId, onSelectRun }: SidebarProps) 
         </div>
       </div>
 
-      <div className="p-4 border-t border-gray-200">
-        <p className="text-xs text-gray-500 text-center">
+      <div className="p-4 border-t border-border">
+        <p className="text-xs text-muted-foreground text-center">
           {runs.length} runs total
         </p>
       </div>

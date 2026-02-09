@@ -13,23 +13,23 @@ export function Header() {
   };
 
   return (
-    <header className="h-16 border-b border-gray-200 bg-white px-6 flex items-center justify-between">
+    <header className="h-16 border-b border-border bg-surface px-6 flex items-center justify-between">
       <div className="flex items-center gap-4">
         <Link href="/dashboard" className="flex items-center gap-2">
-          <span className="text-xl font-bold text-gray-900">CrewAI Platform</span>
+          <span className="text-xl font-semibold text-foreground">Agent Studio</span>
         </Link>
       </div>
       
       <nav className="flex items-center gap-6">
         <Link 
           href="/dashboard" 
-          className="text-sm font-medium text-gray-600 hover:text-gray-900 transition-colors"
+          className="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors"
         >
           Dashboard
         </Link>
         <Link 
           href="/dashboard/runs" 
-          className="text-sm font-medium text-gray-600 hover:text-gray-900 transition-colors"
+          className="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors"
         >
           Run History
         </Link>
@@ -37,19 +37,19 @@ export function Header() {
 
       <div className="flex items-center gap-4">
         {status === 'loading' ? (
-          <div className="w-8 h-8 rounded-full bg-gray-200 animate-pulse" />
+          <div className="w-8 h-8 rounded-full bg-surface-muted animate-pulse" />
         ) : session?.user ? (
           <div className="relative">
             <button
               onClick={() => setShowMenu(!showMenu)}
               className="flex items-center gap-2 hover:opacity-80 transition-opacity"
             >
-              <div className="w-8 h-8 rounded-full bg-blue-600 flex items-center justify-center">
-                <span className="text-sm font-medium text-white">
+              <div className="w-8 h-8 rounded-full bg-accent flex items-center justify-center">
+                <span className="text-sm font-medium text-accent-foreground">
                   {session.user.name?.[0]?.toUpperCase() || session.user.email?.[0]?.toUpperCase() || 'U'}
                 </span>
               </div>
-              <span className="text-sm text-gray-700 hidden sm:block">
+              <span className="text-sm text-muted-foreground hidden sm:block">
                 {session.user.name || session.user.email}
               </span>
             </button>
@@ -60,18 +60,18 @@ export function Header() {
                   className="fixed inset-0 z-10" 
                   onClick={() => setShowMenu(false)}
                 />
-                <div className="absolute right-0 mt-2 w-48 bg-white rounded-lg shadow-lg border border-gray-200 py-1 z-20">
-                  <div className="px-4 py-2 border-b border-gray-100">
-                    <p className="text-sm font-medium text-gray-900 truncate">
+                <div className="absolute right-0 mt-2 w-48 bg-surface rounded-lg shadow-lg border border-border py-1 z-20">
+                  <div className="px-4 py-2 border-b border-border">
+                    <p className="text-sm font-medium text-foreground truncate">
                       {session.user.name || 'User'}
                     </p>
-                    <p className="text-xs text-gray-500 truncate">
+                    <p className="text-xs text-muted-foreground truncate">
                       {session.user.email}
                     </p>
                   </div>
                   <button
                     onClick={handleSignOut}
-                    className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-100 transition-colors"
+                    className="w-full text-left px-4 py-2 text-sm text-foreground hover:bg-surface-muted transition-colors"
                   >
                     Sign out
                   </button>
@@ -82,7 +82,7 @@ export function Header() {
         ) : (
           <Link
             href="/login"
-            className="text-sm font-medium text-blue-600 hover:text-blue-700 transition-colors"
+            className="text-sm font-medium text-accent hover:opacity-80 transition-colors"
           >
             Sign in
           </Link>

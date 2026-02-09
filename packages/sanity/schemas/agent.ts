@@ -13,6 +13,27 @@ import {defineType, defineField} from 'sanity'
  * - work_reviewer
  * - narrative_governor
  */
+ 
+const LLM_MODEL_OPTIONS = [
+   {title: 'OpenAI GPT-5.3-Codex', value: 'gpt-5.3-codex'},
+   {title: 'OpenAI GPT-5.2', value: 'gpt-5.2'},
+   {title: 'OpenAI GPT-5.2 Mini', value: 'gpt-5.2-mini'},
+   {title: 'OpenAI GPT-5.2 Nano', value: 'gpt-5.2-nano'},
+   {title: 'OpenAI GPT-4.1', value: 'gpt-4.1'},
+   {title: 'OpenAI GPT-4.1 Mini', value: 'gpt-4.1-mini'},
+   {title: 'OpenAI GPT-4.1 Nano', value: 'gpt-4.1-nano'},
+   {title: 'OpenAI GPT-4o', value: 'gpt-4o'},
+   {title: 'OpenAI GPT-4o Mini', value: 'gpt-4o-mini'},
+   {title: 'OpenAI O1', value: 'o1'},
+   {title: 'OpenAI O1 Mini', value: 'o1-mini'},
+   {title: 'Anthropic Claude Opus 4.6', value: 'claude-opus-4.6'},
+   {title: 'Anthropic Claude Opus 4.5', value: 'claude-opus-4.5'},
+   {title: 'Anthropic Claude Sonnet 4', value: 'claude-sonnet-4'},
+   {title: 'Anthropic Claude 3.7 Sonnet', value: 'claude-3-7-sonnet-20250219'},
+   {title: 'Anthropic Claude 3.5 Sonnet', value: 'claude-3-5-sonnet-20241022'},
+   {title: 'Anthropic Claude 3.5 Haiku', value: 'claude-3-5-haiku-20241022'},
+   {title: 'Anthropic Claude 3 Opus', value: 'claude-3-opus-20240229'},
+]
 export default defineType({
   name: 'agent',
   title: 'Agent',
@@ -57,18 +78,14 @@ export default defineType({
       description: 'Tools this agent can use',
     }),
     defineField({
-      name: 'llmTier',
-      title: 'LLM Tier',
+      name: 'llmModel',
+      title: 'LLM Model',
       type: 'string',
-      description: 'Which LLM tier to use for this agent',
+      description: 'Model to use for this agent',
       options: {
-        list: [
-          {title: 'Default (Sonnet)', value: 'default'},
-          {title: 'Smart (Opus)', value: 'smart'},
-          {title: 'Fast (Haiku)', value: 'fast'},
-        ],
+        list: LLM_MODEL_OPTIONS,
       },
-      initialValue: 'default',
+      initialValue: 'gpt-5.2',
     }),
     defineField({
       name: 'verbose',

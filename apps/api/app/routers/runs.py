@@ -9,6 +9,9 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 
+from app.models.sanity import Agent, Crew, InputField, Task
+from app.services.crew_planner import plan_crew
+from app.services.crew_runner import CrewRunner
 from app.services.input_validator import InputValidationError, validate_inputs
 
 router = APIRouter()
@@ -21,7 +24,8 @@ router = APIRouter()
 class CreateRunRequest(BaseModel):
     """Request to create a new run with dynamic inputs."""
     
-    crew_id: str
+    crew_id: str | None = None
+    objective: str | None = None
     inputs: dict[str, Any]  # Dynamic inputs validated against crew's inputSchema
 
 
@@ -145,14 +149,139 @@ async def create_run(
     """
     sanity = request.app.state.sanity
     
-    # Verify crew exists and get full details including inputSchema
-    crew = await sanity.get_crew(body.crew_id)
-    if not crew:
-        raise HTTPException(status_code=404, detail=f"Crew not found: {body.crew_id}")
-    
-    # Validate inputs against crew's inputSchema
+    if body.crew_id:
+        # Verify crew exists and get full details including inputSchema
+        crew = await sanity.get_crew(body.crew_id)
+        if not crew:
+            raise HTTPException(status_code=404, detail=f"Crew not found: {body.crew_id}")
+        
+        # Validate inputs against crew's inputSchema
+        try:
+            validated_inputs = validate_inputs(crew, body.inputs)
+        except InputValidationError as e:
+            raise HTTPException(
+                status_code=422,
+                detail={
+                    "message": "Input validation failed",
+                    "errors": e.errors,
+                }
+            )
+        
+        # Create run document with validated inputs
+        run_id = await sanity.create_run(
+            crew_id=body.crew_id,
+            inputs=validated_inputs,
+            triggered_by="api",  # TODO: Get from auth context
+        )
+        
+        return {
+            "id": run_id,
+            "status": "pending",
+            "crew": {
+                "id": crew.id,
+                "name": crew.display_name or crew.name,
+                "slug": crew.slug,
+            },
+            "inputs": validated_inputs,
+        }
+
+    planner = await sanity.get_planner()
+    if not planner:
+        raise HTTPException(status_code=500, detail="No enabled crew planner found")
+
+    memory_policy = await sanity.get_memory_policy()
+    if not memory_policy:
+        raise HTTPException(status_code=500, detail="No enabled memory policy found")
+
+    if not planner.get("usePlannerByDefault", True):
+        raise HTTPException(
+            status_code=422,
+            detail="Planner is disabled by default. Provide crew_id to run a crew.",
+        )
+
+    if not body.objective:
+        raise HTTPException(status_code=422, detail="objective is required when crew_id is not provided")
+
+    agents = await sanity.list_agents_full()
+    plan = await plan_crew(body.objective, body.inputs, agents, planner)
+
+    planned_agents = [Agent(**a) for a in agents if a.get("_id") in plan.agents]
+    memory_agent_ref = memory_policy.get("agent") or {}
+    memory_agent_id = None
+    memory_prompt = None
+    if isinstance(memory_agent_ref, dict):
+        memory_agent_id = memory_agent_ref.get("_id") or memory_agent_ref.get("_ref")
+        memory_prompt = memory_agent_ref.get("backstory")
+
+    if not memory_prompt:
+        memory_prompt = (
+            "Summarize prior outputs and remove non-salient details. "
+            "Preserve key decisions, assumptions, and open questions."
+        )
+
+    planned_tasks: list[Task] = []
+    order = 1
+    for task in plan.tasks:
+        if memory_agent_id:
+            summary_task_id = f"task-memory-{order}"
+            planned_tasks.append(
+                Task(
+                    _id=summary_task_id,
+                    name="Memory Summary",
+                    description=f"{memory_prompt}\n\nSummarize context for: {task.name}",
+                    expectedOutput="Concise summary of relevant context for the next task.",
+                    agent={"_id": memory_agent_id},
+                    order=order,
+                )
+            )
+            order += 1
+
+            planned_tasks.append(
+                Task(
+                    _id=f"task-{order}-{task.name}".replace(" ", "-").lower(),
+                    name=task.name,
+                    description=task.description,
+                    expectedOutput=task.expected_output,
+                    agent={"_id": task.agent_id},
+                    contextTasks=[{"_id": summary_task_id}],
+                    order=order,
+                )
+            )
+            order += 1
+        else:
+            planned_tasks.append(
+                Task(
+                    _id=f"task-{order}-{task.name}".replace(" ", "-").lower(),
+                    name=task.name,
+                    description=task.description,
+                    expectedOutput=task.expected_output,
+                    agent={"_id": task.agent_id},
+                    order=order,
+                )
+            )
+            order += 1
+
+    planned_input_schema = [InputField(**field) for field in plan.input_schema]
+
+    planned_crew = Crew(
+        _id="crew-planned",
+        name="Planned Crew",
+        displayName="Planned Crew",
+        description=body.objective,
+        agents=planned_agents,
+        tasks=planned_tasks,
+        inputSchema=planned_input_schema,
+        process=plan.process,
+        memory=False,
+        credentials=[],
+    )
+
     try:
-        validated_inputs = validate_inputs(crew, body.inputs)
+        validated_inputs = (
+            validate_inputs(planned_crew, body.inputs)
+            if planned_input_schema
+            else body.inputs
+        )
     except InputValidationError as e:
         raise HTTPException(
             status_code=422,
@@ -161,23 +290,31 @@ async def create_run(
                 "errors": e.errors,
             }
         )
-    
-    # Create run document with validated inputs
+
     run_id = await sanity.create_run(
-        crew_id=body.crew_id,
+        crew_id=planned_crew.id,
         inputs=validated_inputs,
-        triggered_by="api",  # TODO: Get from auth context
+        triggered_by="planner",
     )
-    
+
+    request.app.state.planned_runs[run_id] = {
+        "crew": planned_crew,
+        "planner": planner,
+        "plan": plan,
+        "inputs": validated_inputs,
+        "memory_policy": memory_policy,
+    }
+
     return {
         "id": run_id,
         "status": "pending",
         "crew": {
-            "id": crew.id,
-            "name": crew.display_name or crew.name,
-            "slug": crew.slug,
+            "id": planned_crew.id,
+            "name": planned_crew.display_name or planned_crew.name,
+            "slug": None,
         },
         "inputs": validated_inputs,
+        "plan": plan.model_dump(),
     }
 
 
@@ -237,7 +374,45 @@ async def stream_run(run_id: str, request: Request) -> EventSourceResponse:
             yield error_event("Run was cancelled")
             return
         
-        # TODO: Integrate with CrewAI execution
+        planned_run = request.app.state.planned_runs.get(run_id)
+        if planned_run:
+            await sanity.update_run_status(
+                run_id,
+                "running",
+                startedAt=datetime.now(timezone.utc).isoformat(),
+            )
+
+            runner = CrewRunner(planned_run["crew"], memory_policy=planned_run["memory_policy"])
+            try:
+                async for event in runner.run_with_streaming(planned_run["inputs"]):
+                    if event.get("event") == "complete":
+                        await sanity.update_run_status(
+                            run_id,
+                            "completed",
+                            completedAt=datetime.now(timezone.utc).isoformat(),
+                            output=event.get("finalOutput", ""),
+                        )
+                        yield complete_event(run_id, event.get("finalOutput", ""))
+                        return
+                    if event.get("event") == "error":
+                        await sanity.update_run_status(
+                            run_id,
+                            "failed",
+                            error={"message": event.get("message", "Unknown error")},
+                        )
+                        yield error_event(event.get("message", "Unknown error"))
+                        return
+
+                    yield {
+                        "event": event.get("event", "agent_message"),
+                        "data": json.dumps(event),
+                    }
+            finally:
+                request.app.state.planned_runs.pop(run_id, None)
+
+            return
+
+        # TODO: Integrate with CrewAI execution for stored crews
         # For now, emit mock events to test the SSE infrastructure
         
         # Update status to running
