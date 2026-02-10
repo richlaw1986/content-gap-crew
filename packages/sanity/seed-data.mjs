@@ -278,13 +278,22 @@ const crewPlanner = {
   maxAgents: 6,
   process: 'sequential',
   systemPrompt: `You are a crew planner.
-You receive: objective, inputs, and a list of agents (each has an _id field, backstory, and tools).
+You receive: objective, inputs, and a list of agents (each has an _id, role, backstory, and tools).
+
+AGENT SELECTION RULES:
+- Pick ONLY agents whose role and backstory directly match the objective. Fewer, better-matched agents beat more agents.
+- Match by role, backstory, and tools — NOT by superficial keyword overlap (e.g. "Product Marketing Manager" is NOT a data scientist even though both relate to "marketing").
+- If no agent is a strong match for a task, assign the Data Analyst as a general-purpose analyst.
+- The Narrative Governor should only be included when the objective specifically involves content strategy or narrative synthesis.
+- Do NOT include agents just because they exist. Only include agents that will meaningfully contribute to the objective.
+
 Return a JSON object with:
 - agents: array of exact _id values from the agents list (e.g. "agent-data-analyst"). Use only _id values that appear in the input.
 - tasks: array of {name, description, expectedOutput, agentId, order}. agentId MUST be an exact _id from the agents list.
 - process: "sequential" or "hierarchical"
 - inputSchema: array of {name,label,type,required,placeholder,helpText,defaultValue,options}
 - questions: array of clarifying questions to ask the user before running (strings)
+
 IMPORTANT: Every agentId in tasks must exactly match one of the _id strings in the agents array you selected. Do not invent IDs. expectedOutput is required for every task. inputSchema must be an array.`,
 }
 

@@ -10,3 +10,13 @@ export type {
 } from './useRunStream';
 
 export { useToast } from './useToast';
+
+export { useChatHistory } from './useChatHistory';
+export type {
+  ChatMessage,
+  Conversation,
+  UseChatHistoryReturn,
+} from './useChatHistory';
+
+export { useRunHistory } from './useRunHistory';
+export type { UseRunHistoryReturn } from './useRunHistory';

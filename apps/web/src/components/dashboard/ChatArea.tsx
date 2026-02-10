@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Button } from '@/components/ui';
 import { RunStreamEvent } from '@/lib/hooks';
+import type { ChatMessage } from '@/lib/hooks/useChatHistory';
 
 interface Message {
   id: string;
@@ -12,7 +13,7 @@ interface Message {
   timestamp: string;
 }
 
-const INITIAL_MESSAGE: Message = {
+const WELCOME_MESSAGE: Message = {
   id: '0',
   role: 'assistant',
   content: 'Welcome to Agent Studio. Describe your goal or launch a workflow to get started.',
@@ -24,6 +25,10 @@ interface ChatAreaProps {
   events?: RunStreamEvent[];
   isRunning?: boolean;
   awaitingInput?: boolean;
+  /** Supply saved messages to restore a previous conversation */
+  initialMessages?: ChatMessage[];
+  /** Called whenever the message list changes so the parent can persist */
+  onMessagesChange?: (messages: ChatMessage[]) => void;
 }
 
 export function ChatArea({
@@ -31,11 +36,51 @@ export function ChatArea({
   events = [],
   isRunning = false,
   awaitingInput = false,
+  initialMessages,
+  onMessagesChange,
 }: ChatAreaProps) {
-  const [messages, setMessages] = useState<Message[]>([INITIAL_MESSAGE]);
+  const [messages, setMessages] = useState<Message[]>(() => {
+    if (initialMessages && initialMessages.length > 0) {
+      return initialMessages;
+    }
+    return [WELCOME_MESSAGE];
+  });
   const [input, setInput] = useState('');
   const [lastEventIndex, setLastEventIndex] = useState(0);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const isLoadingRef = useRef(true);
+  const initialMessagesRef = useRef(initialMessages);
+
+  // When initialMessages change (conversation switch or new chat), reset the chat
+  useEffect(() => {
+    // Skip if the reference hasn't actually changed
+    if (initialMessages === initialMessagesRef.current) return;
+    initialMessagesRef.current = initialMessages;
+
+    // Mark as loading so the persistence effect doesn't fire for this reset
+    isLoadingRef.current = true;
+
+    if (initialMessages && initialMessages.length > 0) {
+      setMessages(initialMessages);
+    } else {
+      setMessages([WELCOME_MESSAGE]);
+    }
+    setLastEventIndex(0);
+  }, [initialMessages]);
+
+  // Notify parent of message changes for persistence (debounced to avoid loops)
+  useEffect(() => {
+    // Skip the initial render / conversation-switch load
+    if (isLoadingRef.current) {
+      isLoadingRef.current = false;
+      return;
+    }
+    const timer = setTimeout(() => {
+      onMessagesChange?.(messages);
+    }, 300);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [messages]);
 
   // Reset event tracking when the events array is cleared (new run)
   useEffect(() => {

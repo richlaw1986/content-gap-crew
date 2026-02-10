@@ -1,5 +1,6 @@
 """Sanity CMS client for fetching crew configurations."""
 
+from datetime import datetime, timezone
 from typing import Any
 
 import httpx
@@ -211,29 +212,33 @@ class SanityClient:
         return await self._query(query, {"id": crew_id})
 
     async def list_runs(self, limit: int = 50, status: str | None = None) -> list[dict[str, Any]]:
+        fields = """{
+            _id,
+            status,
+            objective,
+            questions,
+            clarification,
+            crew->{_id, name, slug},
+            inputs,
+            output,
+            startedAt,
+            completedAt,
+            _createdAt
+        }"""
         if status:
-            query = """*[_type == "run" && status == $status] | order(_createdAt desc) [0...$limit] {
-                _id,
-                status,
-                crew->{_id, name, slug},
-                inputs,
-                _createdAt
-            }"""
+            query = f'*[_type == "run" && status == $status] | order(_createdAt desc) [0...$limit] {fields}'
             return await self._query(query, {"status": status, "limit": limit}) or []
         else:
-            query = """*[_type == "run"] | order(_createdAt desc) [0...$limit] {
-                _id,
-                status,
-                crew->{_id, name, slug},
-                inputs,
-                _createdAt
-            }"""
+            query = f'*[_type == "run"] | order(_createdAt desc) [0...$limit] {fields}'
             return await self._query(query, {"limit": limit}) or []
 
     async def get_run(self, run_id: str) -> Run | None:
         query = """*[_type == "run" && _id == $id][0] {
             _id,
             status,
+            objective,
+            questions,
+            clarification,
             crew->{_id, name, slug},
             inputs,
             output,
@@ -241,7 +246,8 @@ class SanityClient:
             taskResults,
             startedAt,
             completedAt,
-            error
+            error,
+            metadata
         }"""
         result = await self._query(query, {"id": run_id})
         if result:
@@ -317,22 +323,129 @@ class SanityClient:
         }"""
         return await self._query(query) or []
 
-    async def create_run(self, crew_id: str, inputs: dict[str, Any], triggered_by: str | None = None) -> str:
-        """Create a new run document in Sanity."""
-        # For now, generate a local ID - real implementation would use mutations API
+    async def _mutate(self, mutations: list[dict[str, Any]]) -> Any:
+        """Execute mutations against the Sanity mutations API."""
+        client = await self._get_client()
+        url = f"https://{self.project_id}.api.sanity.io/v2021-10-21/data/mutate/{self.dataset}"
+        body = {"mutations": mutations}
+        response = await client.post(url, json=body)
+        if not response.is_success:
+            # Log the actual Sanity error body for debugging
+            try:
+                err_body = response.json()
+            except Exception:
+                err_body = response.text
+            logger.error(f"Sanity mutation failed ({response.status_code}): {err_body}")
+            response.raise_for_status()
+        return response.json()
+
+    async def create_run(
+        self,
+        crew_id: str | None = None,
+        inputs: dict[str, Any] | None = None,
+        triggered_by: str | None = None,
+        objective: str | None = None,
+        questions: list[str] | None = None,
+        status: str = "pending",
+        planned_crew: dict | None = None,
+    ) -> str:
+        """Create a new run document in Sanity.
+
+        Uses ``createOrReplace`` so that re-creating an ID that already
+        exists (e.g. after a retry) will not fail with 409 Conflict.
+        """
         import uuid
+
         run_id = f"run-{uuid.uuid4().hex[:12]}"
-        logger.info(f"Created run {run_id} for crew {crew_id}")
+        inputs = inputs or {}
+
+        # Build the inputs sub-object to match the Sanity schema
+        custom_inputs = [
+            {"_key": k, "key": k, "value": str(v)}
+            for k, v in inputs.items()
+            if k not in ("topic", "objective", "focusAreas")
+        ]
+
+        doc: dict[str, Any] = {
+            "_id": run_id,
+            "_type": "run",
+            "status": status,
+            "inputs": {
+                "topic": inputs.get("topic") or inputs.get("objective") or "",
+            },
+        }
+
+        # Only include customInputs if there are any (avoids empty array issues)
+        if custom_inputs:
+            doc["inputs"]["customInputs"] = custom_inputs
+
+        # Only include focusAreas if present
+        focus_areas = inputs.get("focusAreas")
+        if focus_areas and isinstance(focus_areas, list):
+            doc["inputs"]["focusAreas"] = focus_areas
+
+        if objective:
+            doc["objective"] = objective
+        if questions:
+            doc["questions"] = questions
+
+        # Only set crew reference if it points to a real Sanity document
+        # (skip synthetic IDs like "crew-planned" that don't exist in Sanity)
+        if crew_id and not crew_id.startswith("crew-planned"):
+            doc["crew"] = {"_type": "reference", "_ref": crew_id}
+
+        if triggered_by:
+            doc["metadata"] = {"triggeredBy": triggered_by}
+
+        if planned_crew:
+            doc["plannedCrew"] = planned_crew
+
+        try:
+            await self._mutate([{"createOrReplace": doc}])
+            logger.info(f"Created run {run_id} in Sanity (crew={crew_id})")
+        except Exception as e:
+            logger.warning(f"Failed to persist run {run_id} to Sanity: {e}")
+            # Still return the ID so the in-memory flow works
+
         return run_id
 
     async def update_run_status(self, run_id: str, status: str, **kwargs: Any) -> None:
-        """Update run status in Sanity."""
-        logger.info(f"Updating run {run_id} status to {status}")
-        # Real implementation would use mutations API
+        """Update run status (and optional fields) in Sanity.
+
+        Uses ``createIfNotExists`` followed by a ``patch`` so that the
+        update succeeds even if the initial ``create_run`` call failed
+        (e.g. network blip).  This avoids 404 errors on the patch.
+        """
+        patch: dict[str, Any] = {"status": status}
+
+        for key in ("startedAt", "completedAt", "output", "error",
+                     "clarification", "objective"):
+            if key in kwargs:
+                patch[key] = kwargs[key]
+
+        # Ensure the document exists before patching.  If the create was
+        # lost we create a minimal skeleton so the patch can land.
+        skeleton: dict[str, Any] = {
+            "_id": run_id,
+            "_type": "run",
+            "status": status,
+        }
+
+        try:
+            await self._mutate([
+                {"createIfNotExists": skeleton},
+                {"patch": {"id": run_id, "set": patch}},
+            ])
+            logger.info(f"Updated run {run_id} status to {status}")
+        except Exception as e:
+            logger.warning(f"Failed to update run {run_id} in Sanity: {e}")
 
 
 class StubSanityClient:
     """Stub client for development without Sanity credentials."""
+
+    def __init__(self) -> None:
+        self._runs: dict[str, dict[str, Any]] = {}
 
     @property
     def configured(self) -> bool:
@@ -353,41 +466,75 @@ class StubSanityClient:
 
     async def list_agents(self) -> list[dict[str, Any]]:
         return [
-            {"_id": "agent-1", "name": "data_analyst", "role": "Data Analyst", "llmModel": "gpt-5.2", "toolCount": 11},
-            {"_id": "agent-2", "name": "product_marketer", "role": "Product Marketing Manager", "llmModel": "gpt-5.2", "toolCount": 8},
-            {"_id": "agent-3", "name": "seo_specialist", "role": "SEO & AEO Specialist", "llmModel": "gpt-5.2", "toolCount": 11},
-            {"_id": "agent-4", "name": "work_reviewer", "role": "Content Gap Validator", "llmModel": "gpt-5.2", "toolCount": 5},
-            {"_id": "agent-5", "name": "narrative_governor", "role": "Narrative Governor", "llmModel": "gpt-5.2", "toolCount": 0},
+            {"_id": "agent-data-analyst", "name": "Data Analyst", "role": "Senior Data Analyst", "llmModel": "gpt-5.2", "toolCount": 2},
+            {"_id": "agent-product-marketer", "name": "Product Marketer", "role": "Senior Product Marketing Manager", "llmModel": "gpt-5.2", "toolCount": 3},
+            {"_id": "agent-seo-specialist", "name": "SEO Specialist", "role": "Technical SEO Specialist", "llmModel": "gpt-5.2", "toolCount": 3},
+            {"_id": "agent-work-reviewer", "name": "Work Reviewer", "role": "Quality Assurance Reviewer", "llmModel": "gpt-5.2", "toolCount": 1},
+            {"_id": "agent-narrative-governor", "name": "Narrative Governor", "role": "Content Strategy Director", "llmModel": "gpt-5.2", "toolCount": 0},
         ]
 
     async def list_agents_full(self) -> list[dict[str, Any]]:
         return [
             {
-                "_id": "agent-1",
-                "name": "data_analyst",
-                "role": "Data Analyst",
-                "goal": "Analyze content gaps",
-                "backstory": "Expert analyst",
+                "_id": "agent-data-analyst",
+                "name": "Data Analyst",
+                "role": "Senior Data Analyst",
+                "goal": "Analyze data, find patterns, and produce quantitative insights",
+                "backstory": (
+                    "Expert in data analysis with deep knowledge of SEO metrics, LLM traffic patterns, "
+                    "statistical modelling, and quantitative research. Skilled at finding insights in large datasets. "
+                    "Also serves as a general-purpose analyst for any data-heavy or technical task."
+                ),
                 "llmModel": "gpt-5.2",
                 "tools": [],
             },
             {
-                "_id": "agent-2",
-                "name": "product_marketer",
-                "role": "Product Marketing Manager",
-                "goal": "Analyze content gaps",
-                "backstory": "Expert marketer",
+                "_id": "agent-product-marketer",
+                "name": "Product Marketer",
+                "role": "Senior Product Marketing Manager",
+                "goal": "Identify content gaps and competitive positioning opportunities",
+                "backstory": (
+                    "Experienced product marketer who understands how to position technical products. "
+                    "Expert at competitive analysis, messaging, and go-to-market strategy. "
+                    "Best suited for content strategy, positioning, and competitive intelligence tasks."
+                ),
+                "llmModel": "gpt-5.2",
+                "tools": [],
+            },
+            {
+                "_id": "agent-seo-specialist",
+                "name": "SEO Specialist",
+                "role": "Technical SEO Specialist",
+                "goal": "Optimize content strategy for search visibility and AEO",
+                "backstory": (
+                    "SEO expert focused on technical optimization and emerging AI search patterns. "
+                    "Understands both traditional SEO and LLM optimization (AEO). "
+                    "Best suited for keyword research, search strategy, and content optimization tasks."
+                ),
+                "llmModel": "gpt-5.2",
+                "tools": [],
+            },
+            {
+                "_id": "agent-work-reviewer",
+                "name": "Work Reviewer",
+                "role": "Quality Assurance Reviewer",
+                "goal": "Review and validate analysis quality, ensure actionable recommendations",
+                "backstory": (
+                    "Meticulous reviewer who ensures all analysis is accurate, well-supported, and actionable. "
+                    "Catches gaps and inconsistencies. Best suited as a final review step."
+                ),
                 "llmModel": "gpt-5.2",
                 "tools": [],
             },
             {
                 "_id": "agent-narrative-governor",
-                "name": "narrative_governor",
-                "role": "Narrative Governor",
-                "goal": "Synthesize findings into coherent output",
+                "name": "Narrative Governor",
+                "role": "Content Strategy Director",
+                "goal": "Synthesize findings into coherent content strategy with prioritized recommendations",
                 "backstory": (
-                    "Summarize prior outputs and remove non-salient details. "
-                    "Preserve key decisions, assumptions, and open questions."
+                    "Senior content strategist who excels at turning data into narrative. "
+                    "Creates compelling, actionable content roadmaps. "
+                    "Best suited for content strategy synthesis tasks."
                 ),
                 "llmModel": "gpt-5.2",
                 "tools": [],
@@ -395,16 +542,10 @@ class StubSanityClient:
         ]
 
     async def get_agent(self, agent_id: str) -> Agent | None:
-        agents = await self.list_agents()
+        agents = await self.list_agents_full()
         for a in agents:
             if a["_id"] == agent_id:
-                return Agent(
-                    _id=a["_id"],
-                    name=a["name"],
-                    role=a["role"],
-                    goal="Analyze content gaps",
-                    backstory="Expert analyst",
-                )
+                return Agent(**a)
         return None
 
     async def get_crew(self, crew_id: str) -> Crew | None:
@@ -443,22 +584,51 @@ class StubSanityClient:
         )
 
     async def list_runs(self, limit: int = 50, status: str | None = None) -> list[dict[str, Any]]:
-        return []
+        runs = sorted(
+            self._runs.values(),
+            key=lambda r: r.get("_createdAt", ""),
+            reverse=True,
+        )
+        if status:
+            runs = [r for r in runs if r.get("status") == status]
+        return runs[:limit]
 
     async def get_run(self, run_id: str) -> Run | None:
-        return Run(
-            _id=run_id,
-            crew="crew-content-gap",
-            status="pending",
-            inputs=RunInputs(topic="AI content management"),
-        )
+        doc = self._runs.get(run_id)
+        if not doc:
+            return None
+        return Run(**doc)
 
     async def get_planner(self) -> dict[str, Any] | None:
         return {
             "_id": "crew-planner-default",
             "name": "Default Crew Planner",
             "model": "gpt-5.2",
-            "systemPrompt": "Return a JSON plan with agents, tasks, process, and inputSchema.",
+            "systemPrompt": (
+                "You are a crew planner.\n"
+                "You receive: objective, inputs, and a list of agents (each has an _id, role, backstory, and tools).\n\n"
+                "AGENT SELECTION RULES:\n"
+                "- Pick ONLY agents whose role and backstory directly match the objective. "
+                "Fewer, better-matched agents beat more agents.\n"
+                "- Match by role, backstory, and tools — NOT by superficial keyword overlap "
+                '(e.g. "Product Marketing Manager" is NOT a data scientist even though both relate to "marketing").\n'
+                "- If no agent is a strong match for a task, assign the Data Analyst as a general-purpose analyst.\n"
+                "- The Narrative Governor should only be included when the objective specifically involves "
+                "content strategy or narrative synthesis.\n"
+                "- Do NOT include agents just because they exist. Only include agents that will meaningfully "
+                "contribute to the objective.\n\n"
+                "Return a JSON object with:\n"
+                '- agents: array of exact _id values from the agents list (e.g. "agent-data-analyst"). '
+                "Use only _id values that appear in the input.\n"
+                "- tasks: array of {name, description, expectedOutput, agentId, order}. "
+                "agentId MUST be an exact _id from the agents list.\n"
+                '- process: "sequential" or "hierarchical"\n'
+                "- inputSchema: array of {name,label,type,required,placeholder,helpText,defaultValue,options}\n"
+                "- questions: array of clarifying questions to ask the user before running (strings)\n\n"
+                "IMPORTANT: Every agentId in tasks must exactly match one of the _id strings in the agents "
+                "array you selected. Do not invent IDs. expectedOutput is required for every task. "
+                "inputSchema must be an array."
+            ),
             "maxAgents": 6,
             "process": "sequential",
             "usePlannerByDefault": True,
@@ -518,12 +688,60 @@ class StubSanityClient:
             }
         ]
 
-    async def create_run(self, crew_id: str, inputs: dict[str, Any], triggered_by: str | None = None) -> str:
+    async def create_run(
+        self,
+        crew_id: str | None = None,
+        inputs: dict[str, Any] | None = None,
+        triggered_by: str | None = None,
+        objective: str | None = None,
+        questions: list[str] | None = None,
+        status: str = "pending",
+        planned_crew: dict | None = None,
+    ) -> str:
         import uuid
-        return f"run-{uuid.uuid4().hex[:12]}"
+
+        run_id = f"run-{uuid.uuid4().hex[:12]}"
+        now = datetime.now(timezone.utc).isoformat()
+        inputs = inputs or {}
+        doc: dict[str, Any] = {
+            "_id": run_id,
+            "_type": "run",
+            "_createdAt": now,
+            "status": status,
+            "inputs": {
+                "topic": inputs.get("topic") or inputs.get("objective") or "",
+                "customInputs": [
+                    {"key": k, "value": str(v)}
+                    for k, v in inputs.items()
+                    if k not in ("topic", "objective", "focusAreas")
+                ],
+            },
+        }
+        if objective:
+            doc["objective"] = objective
+        if questions:
+            doc["questions"] = questions
+        if crew_id:
+            doc["crew"] = {"_id": crew_id, "name": crew_id}
+        if triggered_by:
+            doc["metadata"] = {"triggeredBy": triggered_by}
+        if planned_crew:
+            doc["plannedCrew"] = planned_crew
+
+        self._runs[run_id] = doc
+        logger.info(f"Stub: created run {run_id}")
+        return run_id
 
     async def update_run_status(self, run_id: str, status: str, **kwargs: Any) -> None:
-        pass
+        doc = self._runs.get(run_id)
+        if not doc:
+            logger.warning(f"Stub: run {run_id} not found for update")
+            return
+        doc["status"] = status
+        for key in ("startedAt", "completedAt", "output", "error", "clarification", "objective"):
+            if key in kwargs:
+                doc[key] = kwargs[key]
+        logger.info(f"Stub: updated run {run_id} status to {status}")
 
 
 def get_sanity_client() -> SanityClient | StubSanityClient:

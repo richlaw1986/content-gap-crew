@@ -78,9 +78,13 @@ export interface Run {
     slug?: string;
   };
   inputs: Record<string, unknown>;
+  objective?: string;
   questions?: string[];
+  clarification?: string;
   createdAt?: string;
+  startedAt?: string;
   completedAt?: string;
+  output?: string;
   finalOutput?: string;
 }
 

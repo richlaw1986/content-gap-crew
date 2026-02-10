@@ -92,16 +92,32 @@ class RunInputs(BaseModel):
     model_config = {"extra": "allow", "populate_by_name": True}
 
 
+class RunError(BaseModel):
+    """Error details for a failed run."""
+    message: str = ""
+    stack: str | None = None
+    task_name: str | None = Field(alias="taskName", default=None)
+
+    class Config:
+        populate_by_name = True
+
+
 class Run(BaseModel):
     """Run document from Sanity."""
     id: str = Field(alias="_id")
-    crew_id: str = Field(alias="crew", default="")
+    crew_id: str | dict | None = Field(alias="crew", default=None)
     planned_crew: dict | None = Field(alias="plannedCrew", default=None)
+    objective: str | None = None
+    questions: list[str] | None = Field(default=None)
+    clarification: str | None = None
     status: str = "pending"
     started_at: datetime | None = Field(alias="startedAt", default=None)
     completed_at: datetime | None = Field(alias="completedAt", default=None)
     inputs: RunInputs = Field(default_factory=RunInputs)
     output: str | None = None
+    task_results: list[dict] | None = Field(alias="taskResults", default=None)
+    error: RunError | None = None
+    metadata: dict | None = None
 
     class Config:
         populate_by_name = True

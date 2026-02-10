@@ -5,6 +5,9 @@ import task from './task'
 import crew from './crew'
 import run from './run'
 import mcpServer from './mcpServer'
+import crewPlanner from './crewPlanner'
+import memoryPolicy from './memoryPolicy'
+import skill from './skill'
 
 export const schemaTypes = [
   agent,
@@ -14,4 +17,7 @@ export const schemaTypes = [
   crew,
   run,
   mcpServer,
+  crewPlanner,
+  memoryPolicy,
+  skill,
 ]

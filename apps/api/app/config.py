@@ -19,6 +19,9 @@ class Settings(BaseSettings):
     api_port: int = 8000
     debug: bool = False
 
+    # Runtime mode: "local" (bare uvicorn) or "container" (Docker)
+    runtime_mode: str = "local"
+
     # Sanity Configuration (optional for dev with stub client)
     sanity_project_id: str = ""
     sanity_dataset: str = "production"

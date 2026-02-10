@@ -121,7 +121,14 @@ async def list_runs(
 ) -> list[dict[str, Any]]:
     """List runs with optional status filter."""
     sanity = request.app.state.sanity
-    return await sanity.list_runs(limit=limit, status=status)
+    raw = await sanity.list_runs(limit=limit, status=status)
+    # Normalise for frontend: ensure `id` is present alongside `_id`
+    for run in raw:
+        if "_id" in run and "id" not in run:
+            run["id"] = run["_id"]
+        if "_createdAt" in run and "createdAt" not in run:
+            run["createdAt"] = run["_createdAt"]
+    return raw
 
 
 @router.post("")
@@ -155,6 +162,7 @@ async def create_run(
             crew_id=body.crew_id,
             inputs=validated_inputs,
             triggered_by="api",
+            objective=body.objective or validated_inputs.get("topic", ""),
         )
         
         return {
@@ -184,7 +192,18 @@ async def create_run(
     if not body.objective:
         raise HTTPException(status_code=422, detail="objective is required when crew_id is not provided")
 
-    agents = await sanity.list_agents_full()
+    all_agents = await sanity.list_agents_full()
+
+    # Exclude the memory-policy agent from the planner's candidate list.
+    # It will be injected automatically by the memory policy — the planner
+    # should not select it as a regular crew member.
+    memory_agent_id = None
+    if memory_policy:
+        mem_ref = memory_policy.get("agent") or {}
+        if isinstance(mem_ref, dict):
+            memory_agent_id = mem_ref.get("_id") or mem_ref.get("_ref")
+
+    agents = [a for a in all_agents if a.get("_id") != memory_agent_id]
     plan = await plan_crew(body.objective, body.inputs, agents, planner)
 
     # ── Resolve agent IDs (planner may return approximate IDs) ────
@@ -226,7 +245,7 @@ async def create_run(
         if isinstance(memory_agent_ref, dict):
             mem_id = memory_agent_ref.get("_id") or memory_agent_ref.get("_ref")
             if mem_id and all(a.id != mem_id for a in planned_agents):
-                memory_agent_data = next((a for a in agents if a.get("_id") == mem_id), None)
+                memory_agent_data = next((a for a in all_agents if a.get("_id") == mem_id), None)
                 if memory_agent_data:
                     planned_agents.append(Agent(**memory_agent_data))
 
@@ -265,6 +284,16 @@ async def create_run(
             field = {**field, "label": field.get("name", "Input")}
         if field.get("type") not in allowed_types:
             field = {**field, "type": "text"}
+        # Normalise options: LLM sometimes returns [{label, value}] dicts
+        raw_opts = field.get("options")
+        if raw_opts and isinstance(raw_opts, list):
+            normalised = []
+            for opt in raw_opts:
+                if isinstance(opt, dict):
+                    normalised.append(opt.get("value") or opt.get("label") or str(opt))
+                else:
+                    normalised.append(str(opt))
+            field = {**field, "options": normalised}
         planned_input_schema.append(InputField(**field))
 
     # Check for missing required inputs
@@ -304,10 +333,20 @@ async def create_run(
         validated_inputs.setdefault("objective", body.objective)
         validated_inputs.setdefault("topic", body.objective)
 
+    # ── Determine if we need to pause for questions ──
+    all_questions = list(plan.questions or [])
+    if missing_required:
+        all_questions.extend([f"Please provide: {field}" for field in missing_required])
+
+    initial_status = "awaiting_input" if all_questions else "pending"
+
     run_id = await sanity.create_run(
         crew_id=planned_crew.id,
         inputs=validated_inputs,
         triggered_by="planner",
+        objective=body.objective or "",
+        questions=all_questions if all_questions else None,
+        status=initial_status,
     )
 
     # Store the planned run in memory for the stream handler
@@ -317,16 +356,10 @@ async def create_run(
         "plan": plan,
         "inputs": validated_inputs,
         "memory_policy": memory_policy or {},
-        "awaiting_input": False,
+        "awaiting_input": bool(all_questions),
     }
 
-    # ── If planner has questions or inputs are missing, pause ──
-    all_questions = list(plan.questions or [])
-    if missing_required:
-        all_questions.extend([f"Please provide: {field}" for field in missing_required])
-
     if all_questions:
-        request.app.state.planned_runs[run_id]["awaiting_input"] = True
         return {
             "id": run_id,
             "status": "awaiting_input",
@@ -469,19 +502,29 @@ async def continue_run(
     if not isinstance(new_inputs, dict):
         raise HTTPException(status_code=422, detail="inputs must be an object")
 
-    # Merge clarification into the objective so the crew has full context
+    # Enrich the objective with the user's clarification while keeping the
+    # original ask as the primary topic.  The agents should see the full
+    # context: what was asked *and* the user's answers to the planner's
+    # follow-up questions.
     clarification = new_inputs.get("clarification", "")
     if clarification:
-        current_objective = planned_run["inputs"].get("objective", "")
-        enriched = f"{current_objective}\n\nUser clarification: {clarification}"
+        original_objective = planned_run["inputs"].get("objective", "")
+        enriched = f"{original_objective}\n\nAdditional context from user:\n{clarification}"
         planned_run["inputs"]["objective"] = enriched
-        planned_run["inputs"]["topic"] = enriched
+        # Keep the original topic unchanged so "Starting analysis for:" shows the real ask
+        if not planned_run["inputs"].get("topic"):
+            planned_run["inputs"]["topic"] = original_objective
 
     planned_run["inputs"].update(new_inputs)
     planned_run["awaiting_input"] = False
 
-    # Reset Sanity status so the stream handler will execute
+    # Persist clarification and reset status so the stream handler will execute
     sanity = request.app.state.sanity
-    await sanity.update_run_status(run_id, "pending")
+    await sanity.update_run_status(
+        run_id,
+        "pending",
+        clarification=clarification or None,
+        objective=planned_run["inputs"].get("objective"),
+    )
 
     return {"id": run_id, "status": "pending", "inputs": planned_run["inputs"]}

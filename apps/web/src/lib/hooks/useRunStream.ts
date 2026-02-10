@@ -97,6 +97,16 @@ export function useRunStream(
   // Ref mirrors isComplete so closures always see the latest value
   const isCompleteRef = useRef(false);
 
+  // Stable refs for callbacks — prevents `connect` from getting a new
+  // identity every render, which would tear down / re-establish the SSE
+  // connection and cause the crew to execute twice.
+  const onEventRef = useRef(onEvent);
+  onEventRef.current = onEvent;
+  const onCompleteRef = useRef(onComplete);
+  onCompleteRef.current = onComplete;
+  const onErrorRef = useRef(onError);
+  onErrorRef.current = onError;
+
   const disconnect = useCallback(() => {
     if (reconnectTimeoutRef.current) {
       clearTimeout(reconnectTimeoutRef.current);
@@ -153,7 +163,7 @@ export function useRunStream(
       } else {
         const err = new Error('SSE connection failed');
         setError(err);
-        onError?.(err);
+        onErrorRef.current?.(err);
       }
     };
 
@@ -167,12 +177,12 @@ export function useRunStream(
         const event: RunStreamEvent = { ...data, type: eventType };
         
         setEvents(prev => [...prev, event]);
-        onEvent?.(event);
+        onEventRef.current?.(event);
 
         if (eventType === 'complete') {
           isCompleteRef.current = true;
           setIsComplete(true);
-          onComplete?.(data.finalOutput);
+          onCompleteRef.current?.(data.finalOutput);
           disconnect();
         }
 
@@ -182,7 +192,7 @@ export function useRunStream(
           setIsComplete(true);
           const err = new Error(data.message);
           setError(err);
-          onError?.(err);
+          onErrorRef.current?.(err);
           disconnect();
         }
       } catch (err) {
@@ -196,7 +206,7 @@ export function useRunStream(
     eventSource.addEventListener('complete', handleEvent('complete'));
     eventSource.addEventListener('error', handleEvent('error'));
 
-  }, [runId, disconnect, autoReconnect, maxReconnectAttempts, onEvent, onComplete, onError]);
+  }, [runId, disconnect, autoReconnect, maxReconnectAttempts]);
 
   // Auto-connect when runId changes
   useEffect(() => {

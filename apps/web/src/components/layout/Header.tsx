@@ -20,20 +20,8 @@ export function Header() {
         </Link>
       </div>
       
-      <nav className="flex items-center gap-6">
-        <Link 
-          href="/dashboard" 
-          className="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors"
-        >
-          Studio
-        </Link>
-        <Link 
-          href="/dashboard/runs" 
-          className="text-sm font-medium text-muted-foreground hover:text-foreground transition-colors"
-        >
-          History
-        </Link>
-      </nav>
+      {/* Navigation links removed — chat history sidebar replaces them */}
+      <div />
 
       <div className="flex items-center gap-4">
         {status === 'loading' ? (

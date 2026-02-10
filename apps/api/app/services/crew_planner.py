@@ -88,7 +88,10 @@ async def plan_crew(
         "required": ["agents", "tasks", "process", "inputSchema", "questions"],
     }
 
-    llm = ChatOpenAI(model=model, temperature=0.0)
+    from app.config import get_settings
+
+    settings = get_settings()
+    llm = ChatOpenAI(model=model, temperature=0.0, api_key=settings.openai_api_key)
     response = llm.invoke(
         [
             {"role": "system", "content": system_prompt},

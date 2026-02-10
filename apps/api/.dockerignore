@@ -1,0 +1,30 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# Environment / secrets
+.env
+.env.*
+
+# Git
+.git/
+.gitignore
+
+# Tests
+tests/
+
+# IDE / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Docs (not needed at runtime)
+*.md
+TOOLS.md
+CREDENTIAL_PATTERNS.md

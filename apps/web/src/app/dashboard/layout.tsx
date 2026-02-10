@@ -9,9 +9,8 @@ export default function DashboardLayout({
     <div className="h-screen flex flex-col bg-background">
       <Header />
       <div className="flex-1 flex overflow-hidden">
-        <main className="flex-1 overflow-y-auto bg-background">
-          {children}
-        </main>
+        {/* Sidebar + main rendered by children (page.tsx controls the sidebar) */}
+        {children}
       </div>
     </div>
   );

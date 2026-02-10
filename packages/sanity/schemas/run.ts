@@ -93,12 +93,32 @@ export default defineType({
       ],
     }),
     defineField({
+      name: 'objective',
+      title: 'Objective',
+      type: 'text',
+      description: 'The original user objective / prompt that triggered this run',
+    }),
+    defineField({
+      name: 'questions',
+      title: 'Clarifying Questions',
+      type: 'array',
+      of: [{type: 'string'}],
+      description: 'Questions the planner asked before execution',
+    }),
+    defineField({
+      name: 'clarification',
+      title: 'User Clarification',
+      type: 'text',
+      description: "User's answers to the planner's clarifying questions",
+    }),
+    defineField({
       name: 'status',
       title: 'Status',
       type: 'string',
       options: {
         list: [
           {title: 'Pending', value: 'pending'},
+          {title: 'Awaiting Input', value: 'awaiting_input'},
           {title: 'Running', value: 'running'},
           {title: 'Completed', value: 'completed'},
           {title: 'Failed', value: 'failed'},

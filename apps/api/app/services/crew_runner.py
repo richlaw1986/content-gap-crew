@@ -337,13 +337,31 @@ class CrewRunner:
         loop = asyncio.get_event_loop()
         
         try:
-        # Emit agent activity events for each agent
-            for i, agent in enumerate(crew.agents):
+            # Determine the memory agent role so we can exclude it from
+            # the "Starting analysis" announcements (it's a behind-the-scenes
+            # helper, not a real analysis agent visible to the user).
+            memory_agent_role = None
+            if self._memory_policy:
+                mem_ref = self._memory_policy.get("agent") or {}
+                if isinstance(mem_ref, dict):
+                    memory_agent_role = mem_ref.get("role")
+
+            # Deduplicate agents (memory agent may appear multiple times)
+            seen_roles: set[str] = set()
+            topic = inputs.get("topic") or inputs.get("objective") or "unknown topic"
+
+            for agent in crew.agents:
+                if agent.role == memory_agent_role:
+                    continue  # skip memory agent
+                if agent.role in seen_roles:
+                    continue  # skip duplicates
+                seen_roles.add(agent.role)
+
                 agent_event = {
                     "event": "agent_message",
                     "type": "thinking",
                     "agent": agent.role,
-                "content": f"Starting analysis for: {inputs.get('topic') or inputs.get('objective') or 'unknown topic'}",
+                    "content": f"Starting analysis for: {topic}",
                     "timestamp": datetime.now(timezone.utc).isoformat(),
                 }
                 if on_event:
@@ -394,6 +412,7 @@ class CrewRunner:
             box_re = re.compile(r"^[\s╭╮╰╯┌┐└┘─│┃┼═]+$")
             capturing_final = False
             final_lines: list[str] = []
+            emitted_hashes: set[int] = set()  # dedup identical Final Answer blocks
 
             while not kickoff_future.done() or not stream_queue.empty():
                 try:
@@ -422,16 +441,20 @@ class CrewRunner:
                     if text.startswith("Task Completed") or text.startswith("Task Started") or text.startswith("Crew Execution") or text.startswith("╭") or text.startswith("╰"):
                         capturing_final = False
                         if final_lines:
-                            stream_event = {
-                                "event": "agent_message",
-                                "type": "message",
-                                "agent": last_agent or "Agent",
-                                "content": "\n".join(final_lines),
-                                "timestamp": datetime.now(timezone.utc).isoformat(),
-                            }
-                            if on_event:
-                                on_event(stream_event)
-                            yield stream_event
+                            content = "\n".join(final_lines)
+                            content_hash = hash(content)
+                            if content_hash not in emitted_hashes:
+                                emitted_hashes.add(content_hash)
+                                stream_event = {
+                                    "event": "agent_message",
+                                    "type": "message",
+                                    "agent": last_agent or "Agent",
+                                    "content": content,
+                                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                                }
+                                if on_event:
+                                    on_event(stream_event)
+                                yield stream_event
                             final_lines = []
                         continue
 
@@ -441,40 +464,32 @@ class CrewRunner:
                         continue
                     final_lines.append(cleaned)
 
-            result = await kickoff_future
-            
-            # Emit task outputs if available
-            for task in crew.tasks:
-                output = (
-                    getattr(task, "output", None)
-                    or getattr(task, "result", None)
-                    or getattr(task, "response", None)
-                )
-                if output:
-                    task_event = {
+            # Flush any residual captured content after the loop exits
+            if final_lines:
+                content = "\n".join(final_lines)
+                content_hash = hash(content)
+                if content_hash not in emitted_hashes:
+                    emitted_hashes.add(content_hash)
+                    stream_event = {
                         "event": "agent_message",
                         "type": "message",
-                        "agent": getattr(task.agent, "role", "Agent"),
-                        "content": str(output),
+                        "agent": last_agent or "Agent",
+                        "content": content,
                         "timestamp": datetime.now(timezone.utc).isoformat(),
                     }
                     if on_event:
-                        on_event(task_event)
-                    yield task_event
+                        on_event(stream_event)
+                    yield stream_event
+                final_lines = []
 
-            # Emit completion event
-            # Emit final output as an agent message so it appears in chat streams
+            result = await kickoff_future
+
+            # NOTE: Individual task outputs are already captured and emitted
+            # during the streaming loop above (via "Final Answer:" parsing),
+            # so we skip re-emitting them here to avoid duplicates.
+
+            # Emit the overall crew result + completion event
             final_output = str(result)
-            output_event = {
-                "event": "agent_message",
-                "type": "message",
-                "agent": "Final Output",
-                "content": final_output,
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-            }
-            if on_event:
-                on_event(output_event)
-            yield output_event
 
             complete_event = {
                 "event": "complete",
