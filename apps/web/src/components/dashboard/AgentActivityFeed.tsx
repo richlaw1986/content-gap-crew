@@ -73,9 +73,10 @@ export function AgentActivityFeed({
       case 'tool_call':
         return `Calling ${event.tool}`;
       case 'tool_result':
-        return event.result.length > 100 
-          ? event.result.substring(0, 100) + '...' 
-          : event.result;
+        const resultText = event.result ?? '';
+        return resultText.length > 100 
+          ? resultText.substring(0, 100) + '...' 
+          : resultText || 'Tool returned no output.';
       case 'complete':
         return 'Workflow complete!';
       case 'error':

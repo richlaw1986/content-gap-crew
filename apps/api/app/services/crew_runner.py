@@ -141,6 +141,7 @@ class CrewRunner:
         self,
         task_config: dict[str, Any],
         agents_by_id: dict[str, Agent],
+        agents_list: list[Agent],
         tasks_by_id: dict[str, Task],
     ) -> Task:
         """Build a CrewAI Task from Sanity config.
@@ -148,6 +149,7 @@ class CrewRunner:
         Args:
             task_config: Task document from Sanity
             agents_by_id: Map of agent IDs to Agent instances
+            agents_list: Flat list of agents (for fallback)
             tasks_by_id: Map of task IDs to Task instances (for context)
             
         Returns:
@@ -157,6 +159,17 @@ class CrewRunner:
         agent_ref = task_config.get("agent", {})
         agent_id = agent_ref.get("_id") if isinstance(agent_ref, dict) else None
         agent = agents_by_id.get(agent_id) if agent_id else None
+
+        # Fallback: try substring match on ID, then use first agent
+        if agent is None and agent_id and agents_by_id:
+            norm = agent_id.lower()
+            for aid, ag in agents_by_id.items():
+                if norm in aid.lower() or aid.lower() in norm:
+                    agent = ag
+                    break
+
+        if agent is None and agents_list:
+            agent = agents_list[0]
         
         # Get context tasks
         context = []
@@ -178,6 +191,10 @@ class CrewRunner:
         memory_agent_id: str | None,
         memory_prompt: str | None,
     ) -> list[dict[str, Any]]:
+        """Insert a memory-summary task before each real task (except the first).
+
+        The first real task has no prior outputs to summarise, so we skip it.
+        """
         if not memory_agent_id:
             return tasks
 
@@ -186,28 +203,45 @@ class CrewRunner:
             "Preserve key decisions, assumptions, and open questions."
         )
 
+        sorted_tasks = sorted(tasks, key=lambda t: t.get("order", 0))
+
         injected: list[dict[str, Any]] = []
         order = 1
-        for task in sorted(tasks, key=lambda t: t.get("order", 0)):
-            summary_id = f"task-memory-{order}"
-            injected.append(
-                {
-                    "_id": summary_id,
-                    "name": "Memory Summary",
-                    "description": f"{prompt}\n\nSummarize context for: {task.get('name') or 'next task'}",
-                    "expectedOutput": "Concise summary of relevant context for the next task.",
-                    "agent": {"_id": memory_agent_id},
-                    "order": order,
-                    "contextTasks": [],
-                }
-            )
-            order += 1
 
-            task_with_context = {**task}
-            existing_context = task_with_context.get("contextTasks", [])
-            task_with_context["contextTasks"] = existing_context + [{"_id": summary_id}]
-            task_with_context["order"] = order
-            injected.append(task_with_context)
+        for idx, task in enumerate(sorted_tasks):
+            # Skip memory summary before the very first real task
+            if idx > 0:
+                summary_id = f"task-memory-{order}"
+                injected.append(
+                    {
+                        "_id": summary_id,
+                        "name": "Memory Summary",
+                        "description": (
+                            f"{prompt}\n\nSummarize context for: "
+                            f"{task.get('name') or 'next task'}"
+                        ),
+                        "expectedOutput": (
+                            "Concise summary of relevant context for the next task."
+                        ),
+                        "agent": {"_id": memory_agent_id},
+                        "order": order,
+                        "contextTasks": [],
+                    }
+                )
+                order += 1
+
+                task_with_context = {**task}
+                existing_context = task_with_context.get("contextTasks", [])
+                task_with_context["contextTasks"] = existing_context + [
+                    {"_id": summary_id}
+                ]
+                task_with_context["order"] = order
+                injected.append(task_with_context)
+            else:
+                # First task — just add it as-is
+                task_copy = {**task, "order": order}
+                injected.append(task_copy)
+
             order += 1
 
         return injected
@@ -250,7 +284,7 @@ class CrewRunner:
         
         for task_config in sorted_tasks:
             task_dict = task_config
-            task = self._build_task(task_dict, agents_by_id, tasks_by_id)
+            task = self._build_task(task_dict, agents_by_id, agents_list, tasks_by_id)
             task_id = task_dict.get("_id")
             if task_id:
                 tasks_by_id[task_id] = task
@@ -285,9 +319,8 @@ class CrewRunner:
         """
         crew = self.build_crew()
         
-        # CrewAI doesn't have native async streaming, so we'll run it
-        # in a thread and emit events based on verbose output
-        # For now, we'll use a simplified approach
+        # CrewAI doesn't have native async streaming, so we run it
+        # in a thread and stream stdout/stderr lines as events.
         
         # Emit start event
         start_event = {
@@ -304,13 +337,13 @@ class CrewRunner:
         loop = asyncio.get_event_loop()
         
         try:
-            # Emit agent activity events for each agent
+        # Emit agent activity events for each agent
             for i, agent in enumerate(crew.agents):
                 agent_event = {
                     "event": "agent_message",
                     "type": "thinking",
                     "agent": agent.role,
-                    "content": f"Starting analysis for: {inputs.get('topic', 'unknown topic')}",
+                "content": f"Starting analysis for: {inputs.get('topic') or inputs.get('objective') or 'unknown topic'}",
                     "timestamp": datetime.now(timezone.utc).isoformat(),
                 }
                 if on_event:
@@ -318,17 +351,135 @@ class CrewRunner:
                 yield agent_event
                 await asyncio.sleep(0.1)  # Small delay for streaming effect
             
-            # Run the actual crew
-            result = await loop.run_in_executor(
-                None,
-                lambda: crew.kickoff(inputs=inputs)
-            )
+            # Stream stdout/stderr from CrewAI in real-time
+            import io
+            import threading
+            from contextlib import redirect_stdout, redirect_stderr
+
+            stream_queue: asyncio.Queue[str] = asyncio.Queue()
+            stream_done = threading.Event()
+            last_agent: str | None = None
+
+            class StreamToQueue(io.TextIOBase):
+                def __init__(self, loop: asyncio.AbstractEventLoop):
+                    self._loop = loop
+                    self._buffer = ""
+
+                def write(self, s: str) -> int:
+                    self._buffer += s
+                    while "\n" in self._buffer:
+                        line, self._buffer = self._buffer.split("\n", 1)
+                        self._loop.call_soon_threadsafe(stream_queue.put_nowait, line)
+                    return len(s)
+
+                def flush(self) -> None:
+                    if self._buffer:
+                        self._loop.call_soon_threadsafe(stream_queue.put_nowait, self._buffer)
+                        self._buffer = ""
+
+            def run_kickoff():
+                stream = StreamToQueue(loop)
+                try:
+                    with redirect_stdout(stream), redirect_stderr(stream):
+                        return crew.kickoff(inputs=inputs)
+                finally:
+                    stream.flush()
+                    stream_done.set()
+
+            kickoff_future = loop.run_in_executor(None, run_kickoff)
+
+            import re
+
+            ansi_re = re.compile(r"\x1b\[[0-9;]*m")
+            box_re = re.compile(r"^[\s╭╮╰╯┌┐└┘─│┃┼═]+$")
+            capturing_final = False
+            final_lines: list[str] = []
+
+            while not kickoff_future.done() or not stream_queue.empty():
+                try:
+                    line = await asyncio.wait_for(stream_queue.get(), timeout=0.1)
+                except asyncio.TimeoutError:
+                    continue
+
+                text = ansi_re.sub("", line).strip()
+                if not text:
+                    continue
+
+                if "Agent:" in text:
+                    parts = text.split("Agent:", 1)
+                    agent_name = parts[1].strip() if len(parts) > 1 else None
+                    if agent_name:
+                        last_agent = agent_name
+
+                if "Final Answer:" in text:
+                    capturing_final = True
+                    after = text.split("Final Answer:", 1)[1].strip()
+                    if after:
+                        final_lines.append(after)
+                    continue
+
+                if capturing_final:
+                    if text.startswith("Task Completed") or text.startswith("Task Started") or text.startswith("Crew Execution") or text.startswith("╭") or text.startswith("╰"):
+                        capturing_final = False
+                        if final_lines:
+                            stream_event = {
+                                "event": "agent_message",
+                                "type": "message",
+                                "agent": last_agent or "Agent",
+                                "content": "\n".join(final_lines),
+                                "timestamp": datetime.now(timezone.utc).isoformat(),
+                            }
+                            if on_event:
+                                on_event(stream_event)
+                            yield stream_event
+                            final_lines = []
+                        continue
+
+                    cleaned = re.sub(r"^[│┃|]\s*", "", text)
+                    cleaned = re.sub(r"\s*[│┃|]$", "", cleaned).strip()
+                    if not cleaned or box_re.match(cleaned):
+                        continue
+                    final_lines.append(cleaned)
+
+            result = await kickoff_future
             
+            # Emit task outputs if available
+            for task in crew.tasks:
+                output = (
+                    getattr(task, "output", None)
+                    or getattr(task, "result", None)
+                    or getattr(task, "response", None)
+                )
+                if output:
+                    task_event = {
+                        "event": "agent_message",
+                        "type": "message",
+                        "agent": getattr(task.agent, "role", "Agent"),
+                        "content": str(output),
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                    }
+                    if on_event:
+                        on_event(task_event)
+                    yield task_event
+
             # Emit completion event
+            # Emit final output as an agent message so it appears in chat streams
+            final_output = str(result)
+            output_event = {
+                "event": "agent_message",
+                "type": "message",
+                "agent": "Final Output",
+                "content": final_output,
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+            if on_event:
+                on_event(output_event)
+            yield output_event
+
             complete_event = {
                 "event": "complete",
                 "runId": "run-placeholder",  # Will be set by caller
-                "finalOutput": str(result),
+                "finalOutput": final_output,
                 "timestamp": datetime.now(timezone.utc).isoformat(),
             }
             if on_event:

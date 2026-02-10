@@ -26,6 +26,10 @@ class CrewPlan(BaseModel):
         default_factory=list,
         validation_alias=AliasChoices("inputSchema", "input_schema"),
     )
+    questions: list[str] = Field(
+        default_factory=list,
+        validation_alias=AliasChoices("questions", "clarifyingQuestions"),
+    )
 
 
 async def plan_crew(
@@ -50,12 +54,59 @@ async def plan_crew(
         "agents": agents,
     }
 
-    llm = ChatOpenAI(model=model, temperature=0.2)
+    schema = {
+        "type": "object",
+        "properties": {
+            "agents": {"type": "array", "items": {"type": "string"}},
+            "tasks": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string"},
+                        "description": {"type": "string"},
+                        "expectedOutput": {"type": "string"},
+                        "agentId": {"type": "string"},
+                        "order": {"type": "number"},
+                    },
+                    "required": ["name", "description", "expectedOutput", "agentId", "order"],
+                },
+            },
+            "process": {"type": "string"},
+            "inputSchema": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": True,
+                },
+            },
+            "questions": {
+                "type": "array",
+                "items": {"type": "string"},
+            },
+        },
+        "required": ["agents", "tasks", "process", "inputSchema", "questions"],
+    }
+
+    llm = ChatOpenAI(model=model, temperature=0.0)
     response = llm.invoke(
         [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": json.dumps(payload)},
-        ]
+        ],
+        response_format={"type": "json_schema", "json_schema": {"name": "crew_plan", "schema": schema}},
     )
 
-    return CrewPlan.model_validate_json(response.content)
+    try:
+        return CrewPlan.model_validate_json(response.content)
+    except Exception:
+        repair = llm.invoke(
+            [
+                {
+                    "role": "system",
+                    "content": "Fix this JSON to match the schema exactly. Output only JSON.",
+                },
+                {"role": "user", "content": response.content},
+            ]
+        )
+        return CrewPlan.model_validate_json(repair.content)

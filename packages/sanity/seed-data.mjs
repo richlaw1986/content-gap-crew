@@ -278,13 +278,14 @@ const crewPlanner = {
   maxAgents: 6,
   process: 'sequential',
   systemPrompt: `You are a crew planner.
-You receive: objective, inputs, and a list of agents with backstories + tools.
+You receive: objective, inputs, and a list of agents (each has an _id field, backstory, and tools).
 Return a JSON object with:
-- agents: array of agent ids to use
-- tasks: array of {name, description, expectedOutput, agentId, order}
+- agents: array of exact _id values from the agents list (e.g. "agent-data-analyst"). Use only _id values that appear in the input.
+- tasks: array of {name, description, expectedOutput, agentId, order}. agentId MUST be an exact _id from the agents list.
 - process: "sequential" or "hierarchical"
 - inputSchema: array of {name,label,type,required,placeholder,helpText,defaultValue,options}
-Only use provided agent ids. Choose agents based on backstory and tools.`,
+- questions: array of clarifying questions to ask the user before running (strings)
+IMPORTANT: Every agentId in tasks must exactly match one of the _id strings in the agents array you selected. Do not invent IDs. expectedOutput is required for every task. inputSchema must be an array.`,
 }
 
 const memoryPolicy = {

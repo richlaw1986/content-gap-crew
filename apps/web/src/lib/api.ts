@@ -28,7 +28,7 @@ export async function fetchApi<T>(
   
   const response = await fetch(url, {
     ...options,
-    credentials: 'include', // Send cookies for auth
+    credentials: 'include',
     headers: {
       'Content-Type': 'application/json',
       ...options?.headers,
@@ -51,7 +51,6 @@ export async function fetchApi<T>(
     );
   }
 
-  // Handle empty responses
   const contentType = response.headers.get('content-type');
   if (!contentType?.includes('application/json')) {
     return undefined as T;
@@ -61,27 +60,28 @@ export async function fetchApi<T>(
 }
 
 // =============================================================================
-// API Endpoints
+// Types
 // =============================================================================
 
-// Types (will be shared with backend eventually)
+export interface CreateRunRequest {
+  crew_id?: string;
+  objective?: string;
+  inputs: Record<string, unknown>;
+}
+
 export interface Run {
   id: string;
-  status: 'pending' | 'running' | 'completed' | 'failed';
-  crew: {
+  status: 'pending' | 'running' | 'completed' | 'failed' | 'awaiting_input';
+  crew?: {
     id: string;
     name: string;
-    slug: string;
+    slug?: string;
   };
-  inputs: Record<string, unknown>;  // Dynamic inputs based on crew's inputSchema
+  inputs: Record<string, unknown>;
+  questions?: string[];
   createdAt?: string;
   completedAt?: string;
   finalOutput?: string;
-}
-
-export interface CreateRunRequest {
-  crew_id: string;
-  inputs: Record<string, unknown>;
 }
 
 export interface Crew {
@@ -111,36 +111,42 @@ export interface ChatResponse {
   message: ChatMessage;
 }
 
+// =============================================================================
 // API methods
+// =============================================================================
+
 export const api = {
-  // Health check
   health: () => fetchApi<{ status: string }>('/api/health'),
   
-  // Runs
   runs: {
     create: (data: CreateRunRequest) => 
       fetchApi<Run>('/api/runs', { 
         method: 'POST', 
-        body: JSON.stringify(data) 
+        body: JSON.stringify(data),
       }),
+
+    continue: (id: string, inputs: Record<string, unknown>) =>
+      fetchApi<Run>(`/api/runs/${id}/continue`, {
+        method: 'POST',
+        body: JSON.stringify({ inputs }),
+      }),
+
     get: (id: string) => 
       fetchApi<Run>(`/api/runs/${id}`),
+
     list: () => 
       fetchApi<Run[]>('/api/runs'),
   },
 
-  // Crews
   crews: {
     list: () => fetchApi<Crew[]>('/api/crews'),
     get: (id: string) => fetchApi<Crew>(`/api/crews/${id}`),
   },
 
-  // Agents
   agents: {
     list: () => fetchApi<Agent[]>('/api/agents'),
   },
 
-  // Chat (pre-run discussion)
   chat: (data: ChatRequest) =>
     fetchApi<ChatResponse>('/api/chat', {
       method: 'POST',

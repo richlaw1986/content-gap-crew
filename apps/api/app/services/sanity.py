@@ -380,6 +380,18 @@ class StubSanityClient:
                 "llmModel": "gpt-5.2",
                 "tools": [],
             },
+            {
+                "_id": "agent-narrative-governor",
+                "name": "narrative_governor",
+                "role": "Narrative Governor",
+                "goal": "Synthesize findings into coherent output",
+                "backstory": (
+                    "Summarize prior outputs and remove non-salient details. "
+                    "Preserve key decisions, assumptions, and open questions."
+                ),
+                "llmModel": "gpt-5.2",
+                "tools": [],
+            },
         ]
 
     async def get_agent(self, agent_id: str) -> Agent | None:

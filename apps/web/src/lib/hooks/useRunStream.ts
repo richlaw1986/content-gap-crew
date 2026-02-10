@@ -94,6 +94,8 @@ export function useRunStream(
   const eventSourceRef = useRef<EventSource | null>(null);
   const reconnectAttemptsRef = useRef(0);
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  // Ref mirrors isComplete so closures always see the latest value
+  const isCompleteRef = useRef(false);
 
   const disconnect = useCallback(() => {
     if (reconnectTimeoutRef.current) {
@@ -114,6 +116,7 @@ export function useRunStream(
     disconnect();
     setError(null);
     setIsComplete(false);
+    isCompleteRef.current = false;
 
     const baseUrl = getApiUrl();
     const url = `${baseUrl}/api/runs/${runId}/stream`;
@@ -129,18 +132,23 @@ export function useRunStream(
       reconnectAttemptsRef.current = 0;
     };
 
-    eventSource.onerror = (e) => {
-      console.error('SSE connection error:', e);
+    eventSource.onerror = () => {
       setIsConnected(false);
 
-      // Attempt reconnect if not complete
-      if (autoReconnect && !isComplete && reconnectAttemptsRef.current < maxReconnectAttempts) {
+      // Don't reconnect if the run already completed or errored out
+      if (isCompleteRef.current) {
+        return;
+      }
+
+      if (autoReconnect && reconnectAttemptsRef.current < maxReconnectAttempts) {
         reconnectAttemptsRef.current++;
         const delay = Math.min(1000 * Math.pow(2, reconnectAttemptsRef.current), 10000);
         
         reconnectTimeoutRef.current = setTimeout(() => {
-          console.log(`Reconnecting (attempt ${reconnectAttemptsRef.current})...`);
-          connect();
+          // Double-check before actually reconnecting
+          if (!isCompleteRef.current) {
+            connect();
+          }
         }, delay);
       } else {
         const err = new Error('SSE connection failed');
@@ -152,6 +160,9 @@ export function useRunStream(
     // Handle different event types
     const handleEvent = (eventType: string) => (e: MessageEvent) => {
       try {
+        if (!e.data || e.data === 'undefined') {
+          return;
+        }
         const data = JSON.parse(e.data);
         const event: RunStreamEvent = { ...data, type: eventType };
         
@@ -159,15 +170,20 @@ export function useRunStream(
         onEvent?.(event);
 
         if (eventType === 'complete') {
+          isCompleteRef.current = true;
           setIsComplete(true);
           onComplete?.(data.finalOutput);
           disconnect();
         }
 
         if (eventType === 'error') {
+          // Mark as complete so we don't reconnect into the same error
+          isCompleteRef.current = true;
+          setIsComplete(true);
           const err = new Error(data.message);
           setError(err);
           onError?.(err);
+          disconnect();
         }
       } catch (err) {
         console.error('Failed to parse SSE event:', err);
@@ -180,7 +196,7 @@ export function useRunStream(
     eventSource.addEventListener('complete', handleEvent('complete'));
     eventSource.addEventListener('error', handleEvent('error'));
 
-  }, [runId, disconnect, autoReconnect, maxReconnectAttempts, isComplete, onEvent, onComplete, onError]);
+  }, [runId, disconnect, autoReconnect, maxReconnectAttempts, onEvent, onComplete, onError]);
 
   // Auto-connect when runId changes
   useEffect(() => {
