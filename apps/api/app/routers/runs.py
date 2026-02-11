@@ -9,10 +9,11 @@ from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 from sse_starlette.sse import EventSourceResponse
 
-from app.models.sanity import Agent, Crew, InputField, Task
+from app.models.sanity import Agent, Credential, Crew, InputField, Task
 from app.services.crew_planner import plan_crew
 from app.services.crew_runner import CrewRunner
 from app.services.input_validator import InputValidationError, validate_inputs
+from app.services.mcp_client import MCPManager
 
 router = APIRouter()
 
@@ -303,6 +304,10 @@ async def create_run(
         if field.required and (value is None or value == "" or value == []):
             missing_required.append(field.label or field.name)
 
+    # Fetch credentials from Sanity
+    raw_credentials = await sanity.get_all_credentials()
+    crew_credentials = [Credential(**c) for c in raw_credentials]
+
     # Assemble planned crew
     planned_crew = Crew(
         _id="crew-planned",
@@ -314,7 +319,7 @@ async def create_run(
         inputSchema=planned_input_schema,
         process=plan.process,
         memory=False,
-        credentials=[],
+        credentials=crew_credentials,
     )
 
     try:
@@ -444,7 +449,22 @@ async def stream_run(run_id: str, request: Request) -> EventSourceResponse:
             startedAt=datetime.now(timezone.utc).isoformat(),
         )
 
-        runner = CrewRunner(planned_run["crew"], memory_policy=planned_run.get("memory_policy", {}))
+        # Connect MCP servers for additional tools
+        mcp_manager = MCPManager()
+        mcp_tools: list = []
+        try:
+            mcp_configs = await sanity.list_mcp_servers()
+            if mcp_configs:
+                await mcp_manager.connect_servers(mcp_configs)
+                mcp_tools = mcp_manager.get_all_tools()
+        except Exception as mcp_exc:
+            logger.warning(f"MCP setup failed (non-fatal): {mcp_exc}")
+
+        runner = CrewRunner(
+            planned_run["crew"],
+            memory_policy=planned_run.get("memory_policy", {}),
+            mcp_tools=mcp_tools,
+        )
         try:
             async for event in runner.run_with_streaming(planned_run["inputs"]):
                 if event.get("event") == "complete":
@@ -479,6 +499,7 @@ async def stream_run(run_id: str, request: Request) -> EventSourceResponse:
         finally:
             # Clean up — the run is done (success or failure)
             request.app.state.planned_runs.pop(run_id, None)
+            await mcp_manager.disconnect_all()
     
     return EventSourceResponse(event_generator())
 

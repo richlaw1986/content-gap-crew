@@ -32,10 +32,11 @@ from fastapi import APIRouter, HTTPException, Request, WebSocket, WebSocketDisco
 from pydantic import BaseModel
 
 from app.config import get_settings
-from app.models.sanity import Agent, Crew, InputField, Task
+from app.models.sanity import Agent, Credential, Crew, InputField, Task
 from app.services.crew_planner import plan_crew
 from app.services.crew_runner import CrewRunner
 from app.services.input_validator import InputValidationError, validate_inputs
+from app.services.mcp_client import MCPManager
 
 logger = logging.getLogger(__name__)
 
@@ -113,6 +114,89 @@ async def _agent_reply(
         return name, "I hear you — let me factor that in."
 
 router = APIRouter()
+
+
+async def _generate_run_summary(
+    memory_agent_config: dict[str, Any] | None,
+    objective: str,
+    final_output: str,
+    conversation_messages: list[dict],
+) -> str | None:
+    """Use the Narrative Governor's LLM to generate a concise run summary.
+
+    This summary is persisted to the conversation and used as context for
+    follow-up runs — much more concise and relevant than raw messages.
+    """
+    from langchain_anthropic import ChatAnthropic
+    from langchain_openai import ChatOpenAI
+    from langchain_core.messages import HumanMessage, SystemMessage
+
+    settings = get_settings()
+
+    # Determine which model to use — prefer the memory agent's model,
+    # fall back to default
+    if memory_agent_config:
+        model_name = memory_agent_config.get("llmModel") or settings.default_llm_model
+    else:
+        model_name = settings.default_llm_model
+
+    try:
+        if model_name.startswith("claude-"):
+            llm = ChatAnthropic(
+                model=model_name,
+                temperature=0.3,
+                anthropic_api_key=settings.anthropic_api_key,
+            )
+        else:
+            llm = ChatOpenAI(
+                model=model_name,
+                temperature=0.3,
+                api_key=settings.openai_api_key,
+            )
+
+        # Build a digest of user messages + key agent outputs from the conversation
+        convo_digest_lines = []
+        for m in conversation_messages[-20:]:
+            sender = m.get("sender", "")
+            content = m.get("content", "")
+            mtype = m.get("type", "")
+            if not content or mtype in ("thinking", "status", "system"):
+                continue
+            # Truncate individual messages
+            content_short = content[:500] if len(content) > 500 else content
+            convo_digest_lines.append(f"[{sender}]: {content_short}")
+
+        convo_digest = "\n".join(convo_digest_lines[-15:])
+
+        system_prompt = (
+            "You are a conversation memory manager. Your ONLY job is to produce a "
+            "concise, factual summary of what happened in this crew run.\n\n"
+            "RULES:\n"
+            "- Summarize in 150-250 words max.\n"
+            "- Include: the user's objective, key decisions/findings, the final "
+            "deliverable type, any important constraints or follow-up items.\n"
+            "- Do NOT include meta-commentary, workflow instructions, or tool calls.\n"
+            "- Do NOT include the full content of the deliverable — just what it covers.\n"
+            "- Write in past tense ('The team produced...', 'The user asked for...').\n"
+            "- This summary will be used as context for follow-up requests in the "
+            "same conversation, so focus on facts that would help a new crew continue the work."
+        )
+
+        user_prompt = (
+            f"## User's Objective\n{objective}\n\n"
+            f"## Conversation Messages\n{convo_digest}\n\n"
+            f"## Final Output (first 1500 chars)\n{final_output[:1500]}\n\n"
+            "Produce a concise run summary."
+        )
+
+        messages = [SystemMessage(content=system_prompt), HumanMessage(content=user_prompt)]
+        resp = await llm.ainvoke(messages)
+        summary = resp.content.strip() if resp.content else None
+        return summary
+
+    except Exception as exc:
+        logger.warning(f"Failed to generate run summary: {exc}")
+        return None
 
 
 # ── REST endpoints for conversation CRUD ───────────────────────
@@ -212,6 +296,69 @@ async def conversation_ws(websocket: WebSocket, conversation_id: str):
                 return True
         return False
 
+    async def _build_conversation_context() -> str:
+        """Build context for continuity across runs.
+
+        Strategy:
+        1. If a Narrative Governor run summary exists, use it — it's concise
+           and specifically designed for cross-run context.
+        2. Append any user messages that came AFTER the summary (i.e. the
+           new follow-up message hasn't been summarized yet).
+        3. Fall back to raw message extraction if no summary is available.
+        """
+        conv = await sanity.get_conversation(conversation_id)
+        if not conv:
+            return ""
+
+        run_summary = conv.get("lastRunSummary", "")
+        msgs = conv.get("messages", [])
+
+        if run_summary:
+            # The summary covers everything up to the last completed run.
+            # Append any user messages that arrived after the summary was
+            # generated (typically the new follow-up question).
+            post_summary_user_msgs = []
+            # Walk backwards from the end to find recent user messages
+            # after the last "Run completed" system message
+            found_completion = False
+            for m in reversed(msgs):
+                sender = m.get("sender", "")
+                mtype = m.get("type", "")
+                content = m.get("content", "")
+                if mtype == "system" and "Run completed" in (content or ""):
+                    found_completion = True
+                    break
+                if sender == "user" and content:
+                    post_summary_user_msgs.append(f"[user]: {content}")
+
+            parts = [f"PREVIOUS RUN SUMMARY:\n{run_summary}"]
+            if post_summary_user_msgs:
+                post_summary_user_msgs.reverse()
+                parts.append("RECENT USER MESSAGES:\n" + "\n".join(post_summary_user_msgs))
+            return "\n\n".join(parts)
+
+        # Fallback: no summary yet — extract from raw messages
+        if not msgs:
+            return ""
+
+        significant = []
+        for m in msgs:
+            mtype = m.get("type", "")
+            sender = m.get("sender", "")
+            content = m.get("content", "")
+            if not content or mtype in ("thinking", "status", "system", "question"):
+                continue
+            if sender == "user" or mtype in ("message", "agent_message"):
+                if len(content) > 2000:
+                    content = content[:2000] + "\n... [truncated]"
+                significant.append(f"[{sender}]: {content}")
+
+        if not significant:
+            return ""
+
+        recent = significant[-8:]
+        return "\n\n".join(recent)
+
     async def _run_crew(objective: str, user_inputs: dict[str, Any]):
         """Plan and execute a crew run inside the conversation."""
         nonlocal pending_questions
@@ -233,11 +380,25 @@ async def conversation_ws(websocket: WebSocket, conversation_id: str):
                 memory_agent_id = mem_ref.get("_id") or mem_ref.get("_ref")
         agents = [a for a in all_agents if a.get("_id") != memory_agent_id]
 
+        # ── Build conversation context for continuity ─────────
+        conversation_context = await _build_conversation_context()
+
+        # If there's prior conversation, prepend it to the objective so
+        # both the planner and agents know what happened before.
+        enriched_objective = objective
+        if conversation_context:
+            enriched_objective = (
+                f"CONVERSATION HISTORY (previous messages in this thread):\n"
+                f"{conversation_context}\n\n"
+                f"---\n\n"
+                f"NEW USER REQUEST:\n{objective}"
+            )
+
         # ── Planning phase ──────────────────────────────────
         await send({"type": "system", "content": "Planning your workflow...", "timestamp": _now()})
 
         try:
-            plan = await plan_crew(objective, user_inputs, agents, planner)
+            plan = await plan_crew(enriched_objective, user_inputs, agents, planner)
         except Exception as exc:
             await send({"type": "error", "message": f"Planning failed: {exc}", "timestamp": _now()})
             return
@@ -275,8 +436,8 @@ async def conversation_ws(websocket: WebSocket, conversation_id: str):
             finally:
                 pending_questions.pop(q_id, None)
 
-            # Enrich objective
-            objective = f"{objective}\n\nAdditional context from user:\n{answer}"
+            # Enrich objective with user's answers to clarifying questions
+            enriched_objective = f"{enriched_objective}\n\nAdditional context from user:\n{answer}"
             user_inputs["clarification"] = answer
             await sanity.update_conversation_status(conversation_id, "active")
 
@@ -344,27 +505,31 @@ async def conversation_ws(websocket: WebSocket, conversation_id: str):
             ))
             prev_task_id = task_id
 
+        # ── Fetch credentials from Sanity ─────────────────────
+        raw_credentials = await sanity.get_all_credentials()
+        crew_credentials = [Credential(**c) for c in raw_credentials]
+
         planned_crew = Crew(
             _id="crew-planned",
             name="Planned Crew",
             displayName="Planned Crew",
-            description=objective,
+            description=enriched_objective,
             agents=planned_agents,
             tasks=planned_tasks,
             process=plan.process,
             memory=False,
-            credentials=[],
+            credentials=crew_credentials,
         )
 
-        # Validate inputs
-        inputs = {**user_inputs, "objective": objective, "topic": objective}
+        # Validate inputs — include the enriched objective with history
+        inputs = {**user_inputs, "objective": enriched_objective, "topic": objective}
 
         # ── Create run document ─────────────────────────────
         run_id = await sanity.create_run(
             crew_id=planned_crew.id,
             inputs=inputs,
             triggered_by="conversation",
-            objective=objective,
+            objective=objective,  # Store the original (clean) objective
             status="running",
             conversation_id=conversation_id,
         )
@@ -372,8 +537,25 @@ async def conversation_ws(websocket: WebSocket, conversation_id: str):
         await send({"type": "status", "status": "running", "runId": run_id, "timestamp": _now()})
         await sanity.update_run_status(run_id, "running", startedAt=_now())
 
+        # ── Connect MCP servers and collect tools ──────────
+        mcp_manager = MCPManager()
+        mcp_tools: list = []
+        try:
+            mcp_configs = await sanity.list_mcp_servers()
+            if mcp_configs:
+                await mcp_manager.connect_servers(mcp_configs)
+                mcp_tools = mcp_manager.get_all_tools()
+                if mcp_tools:
+                    logger.info(f"MCP: {len(mcp_tools)} tools from {len(mcp_manager.connected_servers)} servers")
+        except Exception as mcp_exc:
+            logger.warning(f"MCP setup failed (non-fatal): {mcp_exc}")
+
         # ── Execute crew with streaming ─────────────────────
-        runner = CrewRunner(planned_crew, memory_policy=memory_policy or {})
+        runner = CrewRunner(
+            planned_crew,
+            memory_policy=memory_policy or {},
+            mcp_tools=mcp_tools,
+        )
         mem_names = _build_memory_names(memory_policy)
 
         try:
@@ -428,6 +610,37 @@ async def conversation_ws(websocket: WebSocket, conversation_id: str):
                         "timestamp": _now(),
                     })
 
+                    # ── Generate and persist Narrative Governor run summary ──
+                    # This runs async after completion to avoid blocking the
+                    # response. The summary is used for follow-up run context.
+                    try:
+                        mem_agent_cfg = None
+                        if memory_policy:
+                            mem_agent_ref = memory_policy.get("agent")
+                            if isinstance(mem_agent_ref, dict):
+                                mem_agent_cfg = mem_agent_ref
+                        conv = await sanity.get_conversation(conversation_id)
+                        conv_msgs = (conv or {}).get("messages", [])
+                        summary = await _generate_run_summary(
+                            memory_agent_config=mem_agent_cfg,
+                            objective=objective,
+                            final_output=output,
+                            conversation_messages=conv_msgs,
+                        )
+                        if summary:
+                            await sanity.update_conversation_summary(
+                                conversation_id, summary
+                            )
+                            logger.info(
+                                f"Persisted run summary for conversation "
+                                f"{conversation_id} ({len(summary)} chars)"
+                            )
+                    except Exception as summary_exc:
+                        logger.warning(
+                            f"Non-critical: failed to generate run summary: "
+                            f"{summary_exc}"
+                        )
+
                 elif evt_type == "error":
                     await sanity.update_run_status(
                         run_id, "failed",
@@ -445,6 +658,9 @@ async def conversation_ws(websocket: WebSocket, conversation_id: str):
         except Exception as exc:
             await sanity.update_run_status(run_id, "failed", error={"message": str(exc)})
             await send({"type": "error", "message": str(exc), "timestamp": _now()})
+        finally:
+            # Disconnect MCP servers (terminate subprocesses, etc.)
+            await mcp_manager.disconnect_all()
 
     # ── Main receive loop ──────────────────────────────────────
     try:

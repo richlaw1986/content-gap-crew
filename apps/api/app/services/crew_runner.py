@@ -14,16 +14,24 @@ from app.tools import TOOL_REGISTRY, CredentialError
 class CrewRunner:
     """Runs CrewAI crews with dynamic assembly from Sanity configs."""
 
-    def __init__(self, crew_config: CrewModel, memory_policy: dict[str, Any] | None = None):
+    def __init__(
+        self,
+        crew_config: CrewModel,
+        memory_policy: dict[str, Any] | None = None,
+        mcp_tools: list | None = None,
+    ):
         """Initialize the runner with a crew configuration.
         
         Args:
             crew_config: Crew document from Sanity with expanded agents/tasks/credentials
+            memory_policy: Optional memory policy dict
+            mcp_tools: Optional list of MCP tool functions to attach to all agents
         """
         self.config = crew_config
         self.settings = get_settings()
         self._credentials_by_type: dict[str, dict[str, Any]] = {}
         self._memory_policy = memory_policy or {}
+        self._mcp_tools: list = mcp_tools or []
         self._setup_credentials()
 
     def _setup_credentials(self) -> None:
@@ -124,6 +132,10 @@ class CrewRunner:
                 except (CredentialError, ValueError) as e:
                     # Log but continue - agent can work with fewer tools
                     print(f"Warning: Could not build tool {tool_config.get('name')}: {e}")
+
+        # Attach MCP tools (available to all agents)
+        if self._mcp_tools:
+            tools.extend(self._mcp_tools)
         
         llm_model = agent_config.get("llmModel") or agent_config.get("llmTier")
 
@@ -412,16 +424,41 @@ class CrewRunner:
                 return False
 
             # Build agent ID → display name and role → display name mappings
+            # We add MANY variations because CrewAI slugifies roles internally
+            # (e.g. "Senior Data Analyst" → "data_analyst" or "senior_data_analyst").
             agent_name_by_id: dict[str, str] = {}
             agent_name_by_role: dict[str, str] = {}
+
+            def _add_role_variation(key: str, display: str):
+                """Add a key and its normalized variants to the lookup map."""
+                if not key:
+                    return
+                for variant in (
+                    key.lower(),
+                    key.lower().replace(" ", "_"),
+                    key.lower().replace("_", " "),
+                    key.lower().replace("-", " "),
+                    key.lower().replace("-", "_"),
+                ):
+                    if variant and variant not in agent_name_by_role:
+                        agent_name_by_role[variant] = display
+
             for ag in self.config.agents:
                 ad = ag.model_dump(by_alias=True)
                 aid = ad.get("_id", "")
                 role = ad.get("role", "")
-                display = ad.get("name") or role or "Agent"
+                name = ad.get("name", "")
+                display = name or role or "Agent"
                 agent_name_by_id[aid] = display
-                if role:
-                    agent_name_by_role[role.lower()] = display
+                # Add the role and name in all common variations
+                _add_role_variation(role, display)
+                _add_role_variation(name, display)
+                # Also add the Sanity _id (e.g. "agent-data-analyst")
+                if aid:
+                    _add_role_variation(aid, display)
+                    # Strip "agent-" prefix too (CrewAI might use it)
+                    if aid.startswith("agent-"):
+                        _add_role_variation(aid[6:], display)
 
             # Emit "crew assembled" event listing the team
             visible_agents = [
@@ -550,7 +587,7 @@ class CrewRunner:
                         info = task_info_list[task_index]
                         stage_label = info["name"]
                         # Resolve agent name from task config, not stdout
-                        stage_agent = agent_name_by_id.get(info["agent_id"]) or last_agent or "Agent"
+                        stage_agent = agent_name_by_id.get(info["agent_id"]) or _display_name(last_agent)
                         # Skip emitting for memory tasks
                         if not _is_memory_agent(stage_agent):
                             stage_event = {

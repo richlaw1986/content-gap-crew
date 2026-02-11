@@ -155,7 +155,7 @@ class SanityClient:
     async def get_memory_policy(self) -> dict[str, Any] | None:
         query = """*[_type == "memoryPolicy" && enabled == true][0] {
             _id, name,
-            agent->{ _id, name, role, backstory }
+            agent->{ _id, name, role, backstory, llmModel }
         }"""
         return await self._query(query)
 
@@ -175,9 +175,26 @@ class SanityClient:
             params["tags"] = tags
         return await self._query(groq, params) or []
 
+    async def get_all_credentials(self) -> list[dict[str, Any]]:
+        """Fetch all credential documents (with all fields, for tool injection)."""
+        query = """*[_type == "credential"] {
+            _id, name, type, storageMethod, environment,
+            anthropicApiKey,
+            openaiApiKey,
+            bigqueryCredentialsFile, bigqueryTables,
+            gscKeyFile, gscSiteUrl,
+            googleAdsDeveloperToken, googleAdsClientId, googleAdsClientSecret,
+            googleAdsRefreshToken, googleAdsCustomerId,
+            redditClientId, redditClientSecret, redditUserAgent
+        }"""
+        return await self._query(query) or []
+
     async def list_mcp_servers(self) -> list[dict[str, Any]]:
         query = """*[_type == "mcpServer" && enabled == true] {
-            _id, name, displayName, description, transport, tools
+            _id, name, displayName, description, transport,
+            command, args, url,
+            env[]{ key, value, "fromCredential": fromCredential->{ _id, type, storageMethod, openaiApiKey, anthropicApiKey } },
+            tools, timeout
         }"""
         return await self._query(query) or []
 
@@ -292,7 +309,7 @@ class SanityClient:
 
     async def get_conversation(self, conv_id: str) -> dict[str, Any] | None:
         query = """*[_type == "conversation" && _id == $id][0] {
-            _id, title, status, messages, runs, activeRunId, metadata, _createdAt
+            _id, title, status, messages, runs, activeRunId, metadata, lastRunSummary, _createdAt
         }"""
         return await self._query(query, {"id": conv_id})
 
@@ -343,6 +360,13 @@ class SanityClient:
             await self._mutate([{"patch": {"id": conv_id, "set": {"title": title}}}])
         except Exception as e:
             logger.warning(f"Failed to update conversation {conv_id} title: {e}")
+
+    async def update_conversation_summary(self, conv_id: str, summary: str) -> None:
+        """Persist a Narrative Governor run summary for cross-run continuity."""
+        try:
+            await self._mutate([{"patch": {"id": conv_id, "set": {"lastRunSummary": summary}}}])
+        except Exception as e:
+            logger.warning(f"Failed to update conversation {conv_id} summary: {e}")
 
     async def add_run_to_conversation(self, conv_id: str, run_id: str) -> None:
         try:
@@ -446,6 +470,9 @@ class StubSanityClient:
     async def search_skills(self, query: str | None = None, tags: list[str] | None = None, limit: int = 10) -> list[dict[str, Any]]:
         return [{"_id": "skill-eeat-audit", "name": "EEAT Audit", "description": "Assess content quality using EEAT.", "steps": [], "tags": ["seo"], "toolsRequired": [], "inputSchema": [], "outputSchema": "EEAT score"}]
 
+    async def get_all_credentials(self) -> list[dict[str, Any]]:
+        return []
+
     async def list_mcp_servers(self) -> list[dict[str, Any]]:
         return [{"_id": "mcp-demo", "name": "demo_mcp", "displayName": "Demo MCP", "description": "Example MCP server", "transport": "http", "tools": ["demo_tool"]}]
 
@@ -526,6 +553,11 @@ class StubSanityClient:
         conv = self._conversations.get(conv_id)
         if conv:
             conv["title"] = title
+
+    async def update_conversation_summary(self, conv_id: str, summary: str) -> None:
+        conv = self._conversations.get(conv_id)
+        if conv:
+            conv["lastRunSummary"] = summary
 
     async def add_run_to_conversation(self, conv_id: str, run_id: str) -> None:
         conv = self._conversations.get(conv_id)
