@@ -3,8 +3,9 @@ import {defineType, defineField} from 'sanity'
 /**
  * Crew Schema
  * 
- * Represents a complete CrewAI crew configuration.
- * A crew combines agents, tasks, and execution settings.
+ * Represents a reusable CrewAI crew configuration.
+ * A crew defines agents, execution settings, and input schemas.
+ * Tasks are generated dynamically by the planner at runtime.
  * 
  * This allows multiple crew configurations to be stored and selected at runtime.
  * For example: "content-gap-full", "content-gap-quick", "ai-topics-only"
@@ -39,14 +40,6 @@ export default defineType({
       type: 'array',
       of: [{type: 'reference', to: [{type: 'agent'}]}],
       description: 'Agents included in this crew',
-      validation: (Rule) => Rule.required().min(1),
-    }),
-    defineField({
-      name: 'tasks',
-      title: 'Tasks',
-      type: 'array',
-      of: [{type: 'reference', to: [{type: 'task'}]}],
-      description: 'Tasks to execute (in order)',
       validation: (Rule) => Rule.required().min(1),
     }),
     defineField({
@@ -214,8 +207,6 @@ export default defineType({
     select: {
       title: 'displayName',
       name: 'name',
-      agentCount: 'agents.length',
-      taskCount: 'tasks.length',
       isDefault: 'isDefault',
     },
     prepare({title, name, isDefault}) {

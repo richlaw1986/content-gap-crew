@@ -1,7 +1,7 @@
 """Pydantic models matching Sanity schema types."""
 
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import AliasChoices, BaseModel, Field
 
@@ -39,9 +39,9 @@ class Agent(BaseModel):
 
 
 class Task(BaseModel):
-    """Task document from Sanity."""
+    """Task — generated dynamically by the planner, not stored in Sanity."""
     id: str = Field(alias="_id")
-    name: str | None = None  # Allow None from Sanity
+    name: str | None = None
     description: str = ""
     expected_output: str = Field(alias="expectedOutput", default="")
     order: int = 0
@@ -71,7 +71,7 @@ class Crew(BaseModel):
     """Crew document from Sanity."""
     id: str = Field(alias="_id")
     name: str
-    slug: str | None = None  # Allow None from Sanity
+    slug: str | None = None
     display_name: str | None = Field(alias="displayName", default=None)
     description: str | None = None
     agents: list[Agent] = Field(default_factory=list)
@@ -87,8 +87,7 @@ class Crew(BaseModel):
 
 
 class RunInputs(BaseModel):
-    """Dynamic inputs for a crew run - validated against crew's inputSchema."""
-    # Now accepts any key-value pairs
+    """Dynamic inputs for a crew run."""
     model_config = {"extra": "allow", "populate_by_name": True}
 
 
@@ -105,23 +104,54 @@ class RunError(BaseModel):
 class Run(BaseModel):
     """Run document from Sanity."""
     id: str = Field(alias="_id")
+    conversation_id: str | None = Field(alias="conversation", default=None)
     crew_id: str | dict | None = Field(alias="crew", default=None)
     planned_crew: dict | None = Field(alias="plannedCrew", default=None)
     objective: str | None = None
-    questions: list[str] | None = Field(default=None)
-    clarification: str | None = None
     status: str = "pending"
     started_at: datetime | None = Field(alias="startedAt", default=None)
     completed_at: datetime | None = Field(alias="completedAt", default=None)
     inputs: RunInputs = Field(default_factory=RunInputs)
     output: str | None = None
-    task_results: list[dict] | None = Field(alias="taskResults", default=None)
     error: RunError | None = None
     metadata: dict | None = None
 
     class Config:
         populate_by_name = True
 
+
+# ── Conversation models ────────────────────────────────────────
+
+class ConversationMessage(BaseModel):
+    """A single message in a conversation thread."""
+    id: str = Field(alias="_key", default="")
+    sender: str  # "user" | agent role | "system" | "planner"
+    agent_id: str | None = Field(alias="agentId", default=None)
+    type: str = "message"  # message | thinking | question | answer | tool_call | tool_result | error | system
+    content: str = ""
+    metadata: dict[str, Any] | None = None
+    timestamp: str = ""
+
+    class Config:
+        populate_by_name = True
+
+
+class Conversation(BaseModel):
+    """Conversation document from Sanity."""
+    id: str = Field(alias="_id")
+    title: str = ""
+    status: str = "active"  # active | awaiting_input | completed | failed
+    messages: list[ConversationMessage] = Field(default_factory=list)
+    runs: list[str] = Field(default_factory=list)  # run IDs
+    active_run_id: str | None = Field(alias="activeRunId", default=None)
+    metadata: dict | None = None
+    created_at: str | None = Field(alias="_createdAt", default=None)
+
+    class Config:
+        populate_by_name = True
+
+
+# ── Other models ───────────────────────────────────────────────
 
 class Credential(BaseModel):
     """Credential document from Sanity."""
@@ -156,6 +186,21 @@ class Skill(BaseModel):
 
     class Config:
         populate_by_name = True
+
+
+# Chat models (kept for backward compatibility)
+class ChatMessage(BaseModel):
+    role: str
+    content: str
+
+
+class ChatRequest(BaseModel):
+    messages: list[ChatMessage]
+
+
+class ChatResponse(BaseModel):
+    message: ChatMessage
+    suggestedInputs: RunInputs | None = None
 
 
 Crew.model_rebuild()

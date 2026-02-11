@@ -126,11 +126,24 @@ class CrewRunner:
                     print(f"Warning: Could not build tool {tool_config.get('name')}: {e}")
         
         llm_model = agent_config.get("llmModel") or agent_config.get("llmTier")
-        
+
+        # Strip the SKILL_INSTRUCTION boilerplate from backstories — tools
+        # are already provided explicitly via the tools= list.  Leaving it
+        # in causes agents to hallucinate tool calls they can't make.
+        backstory = agent_config.get("backstory", "")
+        _skill_prefix = (
+            "Before starting any task, use the search_skills tool to find "
+            "relevant skills. If you are unsure what tools are available, "
+            "call list_available_tools first. If a skill is found, follow "
+            "its steps and explicitly show compliance in your output."
+        )
+        if backstory.startswith(_skill_prefix):
+            backstory = backstory[len(_skill_prefix):].strip()
+
         return Agent(
             role=agent_config.get("role", ""),
             goal=agent_config.get("goal", ""),
-            backstory=agent_config.get("backstory", ""),
+            backstory=backstory,
             tools=tools,
             llm=self._get_llm(llm_model),
             verbose=agent_config.get("verbose", True),
@@ -190,27 +203,51 @@ class CrewRunner:
         tasks: list[dict[str, Any]],
         memory_agent_id: str | None,
         memory_prompt: str | None,
+        objective: str = "",
     ) -> list[dict[str, Any]]:
         """Insert a memory-summary task before each real task (except the first).
 
         The first real task has no prior outputs to summarise, so we skip it.
+
+        For simple plans (≤ 2 tasks) memory injection is skipped entirely —
+        there is not enough output to benefit from compression, and the extra
+        task actively confuses the pipeline.
         """
         if not memory_agent_id:
             return tasks
 
+        sorted_tasks = sorted(tasks, key=lambda t: t.get("order", 0))
+
+        # Skip memory injection for simple plans — it adds overhead and
+        # the Narrative Governor has nothing useful to compress.
+        if len(sorted_tasks) <= 2:
+            return sorted_tasks
+
         prompt = memory_prompt or (
-            "Summarize prior outputs and remove non-salient details. "
-            "Preserve key decisions, assumptions, and open questions."
+            "You are the memory governor. Your ONLY job is to produce a "
+            "short, factual summary of prior task outputs for the next agent. "
+            "Do NOT call any tools — you have none. Do NOT add instructions, "
+            "meta-commentary, or workflow rules. Just summarize the salient "
+            "facts, decisions, assumptions, and open questions from earlier "
+            "outputs in a concise paragraph."
         )
 
-        sorted_tasks = sorted(tasks, key=lambda t: t.get("order", 0))
+        # Include the user's objective so the Governor knows what matters
+        if objective:
+            prompt += (
+                f"\n\nThe user's original objective is: \"{objective}\"\n"
+                "Keep your summary focused on what is relevant to this objective."
+            )
 
         injected: list[dict[str, Any]] = []
         order = 1
+        prev_real_task_id: str | None = None
 
         for idx, task in enumerate(sorted_tasks):
+            task_id = task.get("_id", f"task-{idx}")
+
             # Skip memory summary before the very first real task
-            if idx > 0:
+            if idx > 0 and prev_real_task_id:
                 summary_id = f"task-memory-{order}"
                 injected.append(
                     {
@@ -225,7 +262,10 @@ class CrewRunner:
                         ),
                         "agent": {"_id": memory_agent_id},
                         "order": order,
-                        "contextTasks": [],
+                        # KEY FIX: give the memory task access to the
+                        # previous real task's output so it actually has
+                        # something to summarize.
+                        "contextTasks": [{"_id": prev_real_task_id}],
                     }
                 )
                 order += 1
@@ -242,12 +282,17 @@ class CrewRunner:
                 task_copy = {**task, "order": order}
                 injected.append(task_copy)
 
+            prev_real_task_id = task_id
             order += 1
 
         return injected
 
-    def build_crew(self) -> Crew:
+    def build_crew(self, objective: str = "") -> Crew:
         """Build the complete CrewAI Crew from config.
+        
+        Args:
+            objective: The user's original objective — passed to memory
+                       tasks so the Narrative Governor knows what matters.
         
         Returns:
             CrewAI Crew instance ready to execute
@@ -269,16 +314,19 @@ class CrewRunner:
         # Sort tasks by order
         memory_agent_ref = self._memory_policy.get("agent") or {}
         memory_agent_id = None
-        memory_prompt = None
         if isinstance(memory_agent_ref, dict):
             memory_agent_id = memory_agent_ref.get("_id") or memory_agent_ref.get("_ref")
-            memory_prompt = memory_agent_ref.get("backstory")
+        # NOTE: we intentionally do NOT use the agent's backstory as the
+        # memory prompt — the backstory is the agent's persona, not a task
+        # instruction.  The _inject_memory_tasks default is purpose-built.
+        memory_prompt = None
 
         raw_tasks = [t.model_dump(by_alias=True) for t in self.config.tasks]
         injected_tasks = self._inject_memory_tasks(
             raw_tasks,
             memory_agent_id,
             memory_prompt,
+            objective=objective,
         )
         sorted_tasks = sorted(injected_tasks, key=lambda t: t.get("order", 0))
         
@@ -317,7 +365,8 @@ class CrewRunner:
         Yields:
             Event dicts with type, agent, content, etc.
         """
-        crew = self.build_crew()
+        objective = inputs.get("objective") or inputs.get("topic") or ""
+        crew = self.build_crew(objective=objective)
         
         # CrewAI doesn't have native async streaming, so we run it
         # in a thread and stream stdout/stderr lines as events.
@@ -337,38 +386,81 @@ class CrewRunner:
         loop = asyncio.get_event_loop()
         
         try:
-            # Determine the memory agent role so we can exclude it from
-            # the "Starting analysis" announcements (it's a behind-the-scenes
-            # helper, not a real analysis agent visible to the user).
-            memory_agent_role = None
+            # Determine the memory agent identifiers so we can exclude it
+            # from user-visible output.  CrewAI stdout uses the agent *role*
+            # in some places and the *name* in others, so we track both.
+            memory_agent_names: set[str] = set()
             if self._memory_policy:
                 mem_ref = self._memory_policy.get("agent") or {}
                 if isinstance(mem_ref, dict):
-                    memory_agent_role = mem_ref.get("role")
+                    for key in ("role", "name"):
+                        val = mem_ref.get(key)
+                        if val:
+                            memory_agent_names.add(val)
+                            memory_agent_names.add(val.lower())
 
-            # Deduplicate agents (memory agent may appear multiple times)
-            seen_roles: set[str] = set()
-            topic = inputs.get("topic") or inputs.get("objective") or "unknown topic"
+            def _is_memory_agent(label: str | None) -> bool:
+                if not label or not memory_agent_names:
+                    return False
+                ll = label.lower()
+                if ll in memory_agent_names or label in memory_agent_names:
+                    return True
+                # Substring match — resilient to CrewAI name mangling
+                for name in memory_agent_names:
+                    if name in ll or ll in name:
+                        return True
+                return False
 
-            for agent in crew.agents:
-                if agent.role == memory_agent_role:
-                    continue  # skip memory agent
-                if agent.role in seen_roles:
-                    continue  # skip duplicates
-                seen_roles.add(agent.role)
+            # Build agent ID → display name and role → display name mappings
+            agent_name_by_id: dict[str, str] = {}
+            agent_name_by_role: dict[str, str] = {}
+            for ag in self.config.agents:
+                ad = ag.model_dump(by_alias=True)
+                aid = ad.get("_id", "")
+                role = ad.get("role", "")
+                display = ad.get("name") or role or "Agent"
+                agent_name_by_id[aid] = display
+                if role:
+                    agent_name_by_role[role.lower()] = display
 
-                agent_event = {
+            # Emit "crew assembled" event listing the team
+            visible_agents = [
+                ag for ag in crew.agents
+                if not _is_memory_agent(ag.role)
+            ]
+            def _normalize(s: str) -> str:
+                """Normalize agent labels for matching (underscores, hyphens → spaces)."""
+                return s.lower().replace("_", " ").replace("-", " ").strip()
+
+            def _display_name(raw_label: str | None) -> str:
+                """Resolve a stdout agent label to its display name."""
+                if not raw_label:
+                    return "Agent"
+                norm = _normalize(raw_label)
+                # Try exact role match (normalized)
+                for role_key, name in agent_name_by_role.items():
+                    if _normalize(role_key) == norm:
+                        return name
+                # Substring match (normalized)
+                for role_key, name in agent_name_by_role.items():
+                    nk = _normalize(role_key)
+                    if nk in norm or norm in nk:
+                        return name
+                return raw_label  # fall back to raw label
+
+            if visible_agents:
+                agent_names = [_display_name(ag.role) for ag in visible_agents]
+                assembled_event = {
                     "event": "agent_message",
-                    "type": "thinking",
-                    "agent": agent.role,
-                    "content": f"Starting analysis for: {topic}",
+                    "type": "system",
+                    "agent": "system",
+                    "content": f"Crew assembled: {', '.join(agent_names)}",
                     "timestamp": datetime.now(timezone.utc).isoformat(),
                 }
                 if on_event:
-                    on_event(agent_event)
-                yield agent_event
-                await asyncio.sleep(0.1)  # Small delay for streaming effect
-            
+                    on_event(assembled_event)
+                yield assembled_event
+
             # Stream stdout/stderr from CrewAI in real-time
             import io
             import threading
@@ -410,9 +502,31 @@ class CrewRunner:
 
             ansi_re = re.compile(r"\x1b\[[0-9;]*m")
             box_re = re.compile(r"^[\s╭╮╰╯┌┐└┘─│┃┼═]+$")
+            # Lines agents emit when they hallucinate tool calls — never useful to the user
+            noise_re = re.compile(
+                r"^(Calling\s+(search_skills|list_available_tools|search_skills\b|list_available_tools\b))"
+                r"|^(I don't have access to|I need to call|Let me (check|search|call))",
+                re.IGNORECASE,
+            )
             capturing_final = False
             final_lines: list[str] = []
             emitted_hashes: set[int] = set()  # dedup identical Final Answer blocks
+            task_index = 0  # track which task we're on
+            # Build a list of task info for workflow stage messages
+            # Use self.config.tasks (the source config), sorted by order
+            _raw_tasks = sorted(
+                [t.model_dump(by_alias=True) for t in self.config.tasks],
+                key=lambda t: t.get("order", 0),
+            )
+            task_info_list = [
+                {
+                    "name": t.get("name", f"Task {i+1}"),
+                    "agent_id": (t.get("agent") or {}).get("_id", ""),
+                }
+                for i, t in enumerate(_raw_tasks)
+                # Skip memory tasks from the stage display
+                if t.get("name") != "Memory Summary"
+            ]
 
             while not kickoff_future.done() or not stream_queue.empty():
                 try:
@@ -429,6 +543,47 @@ class CrewRunner:
                     agent_name = parts[1].strip() if len(parts) > 1 else None
                     if agent_name:
                         last_agent = agent_name
+
+                # Emit workflow stage message when a new task starts
+                if "Task Started" in text or ("Task:" in text and "Started" in text):
+                    if task_index < len(task_info_list):
+                        info = task_info_list[task_index]
+                        stage_label = info["name"]
+                        # Resolve agent name from task config, not stdout
+                        stage_agent = agent_name_by_id.get(info["agent_id"]) or last_agent or "Agent"
+                        # Skip emitting for memory tasks
+                        if not _is_memory_agent(stage_agent):
+                            stage_event = {
+                                "event": "agent_message",
+                                "type": "thinking",
+                                "agent": stage_agent,
+                                "content": f"Working on: {stage_label}",
+                                "timestamp": datetime.now(timezone.utc).isoformat(),
+                            }
+                            if on_event:
+                                on_event(stage_event)
+                            yield stage_event
+                        task_index += 1
+                    continue
+
+                # Suppress memory agent output from the user-visible stream
+                if _is_memory_agent(last_agent):
+                    # Still process Final Answer boundaries but don't emit
+                    if "Final Answer:" in text:
+                        capturing_final = True
+                        after = text.split("Final Answer:", 1)[1].strip()
+                        if after:
+                            final_lines.append(after)
+                    elif capturing_final:
+                        if text.startswith("Task Completed") or text.startswith("Task Started") or text.startswith("Crew Execution") or text.startswith("╭") or text.startswith("╰"):
+                            capturing_final = False
+                            final_lines = []
+                        else:
+                            cleaned = re.sub(r"^[│┃|]\s*", "", text)
+                            cleaned = re.sub(r"\s*[│┃|]$", "", cleaned).strip()
+                            if cleaned and not box_re.match(cleaned):
+                                final_lines.append(cleaned)
+                    continue
 
                 if "Final Answer:" in text:
                     capturing_final = True
@@ -448,7 +603,7 @@ class CrewRunner:
                                 stream_event = {
                                     "event": "agent_message",
                                     "type": "message",
-                                    "agent": last_agent or "Agent",
+                                    "agent": _display_name(last_agent),
                                     "content": content,
                                     "timestamp": datetime.now(timezone.utc).isoformat(),
                                 }
@@ -462,6 +617,8 @@ class CrewRunner:
                     cleaned = re.sub(r"\s*[│┃|]$", "", cleaned).strip()
                     if not cleaned or box_re.match(cleaned):
                         continue
+                    if noise_re.match(cleaned):
+                        continue  # skip hallucinated tool-call chatter
                     final_lines.append(cleaned)
 
             # Flush any residual captured content after the loop exits
@@ -473,7 +630,7 @@ class CrewRunner:
                     stream_event = {
                         "event": "agent_message",
                         "type": "message",
-                        "agent": last_agent or "Agent",
+                        "agent": _display_name(last_agent),
                         "content": content,
                         "timestamp": datetime.now(timezone.utc).isoformat(),
                     }

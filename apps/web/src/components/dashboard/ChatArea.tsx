@@ -2,218 +2,123 @@
 
 import { useEffect, useRef, useState } from 'react';
 import { Button } from '@/components/ui';
-import { RunStreamEvent } from '@/lib/hooks';
-import type { ChatMessage } from '@/lib/hooks/useChatHistory';
+import { MarkdownContent } from './MarkdownContent';
+import type { ConversationMessage } from '@/lib/hooks/useConversation';
 
-interface Message {
-  id: string;
-  role: 'user' | 'assistant' | 'agent';
-  agentName?: string;
-  content: string;
-  timestamp: string;
+interface ChatAreaProps {
+  messages?: ConversationMessage[];
+  isConnected?: boolean;
+  isRunning?: boolean;
+  awaitingInput?: boolean;
+  onSendMessage?: (content: string) => void;
+  onSendAnswer?: (content: string) => void;
 }
 
-const WELCOME_MESSAGE: Message = {
+const WELCOME_MESSAGE: ConversationMessage = {
   id: '0',
-  role: 'assistant',
-  content: 'Welcome to Agent Studio. Describe your goal or launch a workflow to get started.',
+  type: 'system',
+  sender: 'system',
+  content: 'Welcome to Agent Studio. Describe your goal to get started — agents will plan and coordinate in real time.',
   timestamp: new Date().toISOString(),
 };
 
-interface ChatAreaProps {
-  onSend?: (message: string) => void;
-  events?: RunStreamEvent[];
-  isRunning?: boolean;
-  awaitingInput?: boolean;
-  /** Supply saved messages to restore a previous conversation */
-  initialMessages?: ChatMessage[];
-  /** Called whenever the message list changes so the parent can persist */
-  onMessagesChange?: (messages: ChatMessage[]) => void;
-}
-
 export function ChatArea({
-  onSend,
-  events = [],
+  messages = [],
+  isConnected = false,
   isRunning = false,
   awaitingInput = false,
-  initialMessages,
-  onMessagesChange,
+  onSendMessage,
+  onSendAnswer,
 }: ChatAreaProps) {
-  const [messages, setMessages] = useState<Message[]>(() => {
-    if (initialMessages && initialMessages.length > 0) {
-      return initialMessages;
-    }
-    return [WELCOME_MESSAGE];
-  });
   const [input, setInput] = useState('');
-  const [lastEventIndex, setLastEventIndex] = useState(0);
   const bottomRef = useRef<HTMLDivElement>(null);
-  const isLoadingRef = useRef(true);
-  const initialMessagesRef = useRef(initialMessages);
 
-  // When initialMessages change (conversation switch or new chat), reset the chat
-  useEffect(() => {
-    // Skip if the reference hasn't actually changed
-    if (initialMessages === initialMessagesRef.current) return;
-    initialMessagesRef.current = initialMessages;
+  // Combine welcome message with real messages
+  const displayMessages = messages.length > 0 ? messages : [WELCOME_MESSAGE];
 
-    // Mark as loading so the persistence effect doesn't fire for this reset
-    isLoadingRef.current = true;
-
-    if (initialMessages && initialMessages.length > 0) {
-      setMessages(initialMessages);
-    } else {
-      setMessages([WELCOME_MESSAGE]);
-    }
-    setLastEventIndex(0);
-  }, [initialMessages]);
-
-  // Notify parent of message changes for persistence (debounced to avoid loops)
-  useEffect(() => {
-    // Skip the initial render / conversation-switch load
-    if (isLoadingRef.current) {
-      isLoadingRef.current = false;
-      return;
-    }
-    const timer = setTimeout(() => {
-      onMessagesChange?.(messages);
-    }, 300);
-    return () => clearTimeout(timer);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [messages]);
-
-  // Reset event tracking when the events array is cleared (new run)
-  useEffect(() => {
-    if (events.length === 0) {
-      setLastEventIndex(0);
-    }
-  }, [events.length]);
-
-  // Process new events into chat messages
-  useEffect(() => {
-    if (events.length <= lastEventIndex) return;
-
-    const newEvents = events.slice(lastEventIndex);
-    const newMessages: Message[] = newEvents
-      .map((event, idx) => {
-        const base: Message = {
-          id: `${event.type}-${lastEventIndex + idx}-${event.timestamp}`,
-          role: event.type === 'error' ? 'assistant' : 'agent',
-          agentName: 'agent' in event ? event.agent : undefined,
-          content: '',
-          timestamp: event.timestamp,
-        };
-
-        switch (event.type) {
-          case 'agent_message':
-            base.content = event.content;
-            return base;
-          case 'tool_call':
-            base.content = `Tool call: ${event.tool}`;
-            return base;
-          case 'tool_result':
-            base.content = `Tool result: ${event.tool}`;
-            return base;
-          case 'complete':
-            base.role = 'assistant';
-            base.content = event.finalOutput
-              ? event.finalOutput.length > 1200
-                ? `${event.finalOutput.substring(0, 1200)}…`
-                : event.finalOutput
-              : 'Workflow complete. Review the activity feed for details.';
-            return base;
-          case 'error':
-            base.role = 'assistant';
-            base.content = `Error: ${event.message}`;
-            return base;
-          default:
-            base.content = 'Update received.';
-            return base;
-        }
-      })
-      .filter((m) => m.content);
-
-    if (newMessages.length) {
-      setMessages((prev) => [...prev, ...newMessages]);
-    }
-    setLastEventIndex(events.length);
-  }, [events, lastEventIndex]);
-
-  // Auto-scroll to bottom
+  // Auto-scroll
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
+  }, [displayMessages.length]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!input.trim()) return;
-    // Block input only when actively running (not when awaiting answers)
-    if (isRunning && !awaitingInput) return;
 
-    const userMessage: Message = {
-      id: Date.now().toString(),
-      role: 'user',
-      content: input,
-      timestamp: new Date().toISOString(),
-    };
-
-    setMessages((prev) => [...prev, userMessage]);
-
-    // If this is a brand-new objective (not answering questions), show a planning note
-    if (!awaitingInput) {
-      const planMessage: Message = {
-        id: (Date.now() + 1).toString(),
-        role: 'assistant',
-        content: `Planning workflow for "${input.trim()}". You'll see agents coordinate here as they work.`,
-        timestamp: new Date().toISOString(),
-      };
-      setMessages((prev) => [...prev, planMessage]);
+    if (awaitingInput) {
+      onSendAnswer?.(input.trim());
+    } else {
+      // Works whether a run is active or not — backend queues if busy
+      onSendMessage?.(input.trim());
     }
-
-    onSend?.(input.trim());
     setInput('');
   };
 
-  // ── Styling helpers ────────────────────────────────────────
+  // ── Styling helpers ─────────────────────────────────────
 
-  const getMessageStyles = (role: Message['role']) => {
-    switch (role) {
-      case 'user':
-        return 'bg-accent text-accent-foreground ml-auto';
-      case 'assistant':
-        return 'bg-surface-muted text-foreground border border-border';
-      case 'agent':
-        return 'bg-surface text-foreground border border-border';
-    }
+  const getMessageStyles = (msg: ConversationMessage) => {
+    if (msg.sender === 'user') return 'bg-accent text-accent-foreground ml-auto';
+    if (msg.type === 'error') return 'bg-red-50 text-red-900 border border-red-200';
+    if (msg.type === 'system') return 'bg-surface-muted text-foreground border border-border';
+    if (msg.type === 'complete') return 'bg-emerald-50 text-emerald-900 border border-emerald-200';
+    return 'bg-surface text-foreground border border-border';
   };
 
-  const getAgentAccent = (agentName?: string) => {
-    if (!agentName) return 'border-l-2 border-border';
-    const name = agentName.toLowerCase();
+  const getAccent = (msg: ConversationMessage) => {
+    if (msg.sender === 'user') return '';
+    const name = msg.sender?.toLowerCase() || '';
     if (name.includes('planner')) return 'border-l-4 border-indigo-500';
-    if (name.includes('narrative')) return 'border-l-4 border-violet-500';
+    if (name.includes('narrative') || name.includes('memory')) return 'border-l-4 border-violet-500';
     if (name.includes('product')) return 'border-l-4 border-emerald-500';
     if (name.includes('data')) return 'border-l-4 border-sky-500';
+    if (name === 'system') return 'border-l-4 border-gray-400';
     return 'border-l-4 border-amber-500';
   };
 
-  const canType = awaitingInput || (!isRunning);
+  const getIcon = (msg: ConversationMessage) => {
+    switch (msg.type) {
+      case 'question': return '❓';
+      case 'error': return '❌';
+      case 'complete': return '✅';
+      case 'tool_call': return '🔧';
+      case 'tool_result': return '✅';
+      case 'thinking': return '💭';
+      case 'system': return '🔵';
+      default: return msg.sender === 'user' ? '' : '💬';
+    }
+  };
+
+  const shouldShow = (msg: ConversationMessage) => {
+    // Skip status messages — they're shown in the sidebar
+    if (msg.type === 'status') return false;
+    return true;
+  };
 
   return (
     <div className="h-full flex flex-col">
       {/* Messages area */}
       <div className="flex-1 overflow-y-auto p-6 space-y-4 bg-background">
-        {messages.map((message) => (
+        {displayMessages.filter(shouldShow).map((msg) => (
           <div
-            key={message.id}
-            className={`max-w-2xl rounded-lg p-4 ${getMessageStyles(message.role)} ${getAgentAccent(message.agentName)}`}
+            key={msg.id}
+            className={`max-w-2xl rounded-lg p-4 ${getMessageStyles(msg)} ${getAccent(msg)}`}
           >
-            {message.agentName && (
-              <div className="text-xs font-semibold mb-1 opacity-75">
-                {message.agentName}
+            {msg.sender && msg.sender !== 'user' && (
+              <div className="text-xs font-semibold mb-1 opacity-75 flex items-center gap-1">
+                <span>{getIcon(msg)}</span>
+                <span>{msg.sender}</span>
               </div>
             )}
-            <p className="text-sm whitespace-pre-wrap">{message.content}</p>
+            {msg.sender === 'user' ? (
+              <p className="text-sm whitespace-pre-wrap">{msg.content}</p>
+            ) : (
+              <MarkdownContent content={msg.content || ''} />
+            )}
+            {msg.type === 'tool_call' && msg.tool && (
+              <div className="mt-1 text-xs text-muted-foreground font-mono">
+                Tool: {msg.tool}
+              </div>
+            )}
           </div>
         ))}
 
@@ -240,22 +145,27 @@ export function ChatArea({
             onChange={(e) => setInput(e.target.value)}
             placeholder={
               awaitingInput
-                ? 'Type your answers…'
+                ? 'Type your answer…'
                 : isRunning
-                  ? 'Workflow in progress…'
-                  : 'Describe your goal and press Start…'
+                  ? 'Type to add context or queue a follow-up…'
+                  : 'Describe your goal and press Send…'
             }
-            className="flex-1 px-4 py-3 border border-border rounded-lg bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent disabled:bg-surface-muted disabled:text-muted-foreground"
-            disabled={!canType}
+            className="flex-1 px-4 py-3 border border-border rounded-lg bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent"
           />
           <Button
             type="submit"
             variant="outline"
-            disabled={!canType || !input.trim()}
+            disabled={!input.trim()}
           >
-            {awaitingInput ? 'Answer' : isRunning ? 'Running…' : 'Start'}
+            {awaitingInput ? 'Answer' : 'Send'}
           </Button>
         </form>
+        {isConnected && (
+          <div className="mt-2 flex items-center gap-1.5">
+            <span className="w-1.5 h-1.5 rounded-full bg-green-500" />
+            <span className="text-[10px] text-muted-foreground">Connected</span>
+          </div>
+        )}
       </div>
     </div>
   );

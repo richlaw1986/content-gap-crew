@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
 from app.logging_config import get_logger, setup_logging
-from app.routers import agents, crews, health, runs
+from app.routers import agents, conversations, crews, health, runs
 from app.services.sanity import get_sanity_client
 
 
@@ -16,24 +16,23 @@ from app.services.sanity import get_sanity_client
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Application lifespan handler."""
     settings = get_settings()
-    
-    # Initialize logging
+
     setup_logging(
         level="DEBUG" if settings.debug else "INFO",
-        json_format=not settings.debug  # Human-readable in dev, JSON in prod
+        json_format=not settings.debug,
     )
     logger = get_logger(__name__)
-    
+
     app.state.sanity = get_sanity_client()
-    app.state.planned_runs = {}
-    
+    app.state.planned_runs = {}  # kept for SSE backward compat
+
     logger.info(
-        f"Starting Content Gap Crew API",
-        extra={"debug": settings.debug, "sanity_configured": app.state.sanity.configured}
+        "Starting Content Gap Crew API",
+        extra={"debug": settings.debug, "sanity_configured": app.state.sanity.configured},
     )
-    
+
     yield
-    
+
     logger.info("Shutting down Content Gap Crew API")
     await app.state.sanity.close()
 
@@ -41,7 +40,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
 app = FastAPI(
     title="Content Gap Crew API",
     description="API for running CrewAI content gap analysis crews",
-    version="0.1.0",
+    version="0.2.0",
     lifespan=lifespan,
 )
 
@@ -57,3 +56,4 @@ app.include_router(health.router, tags=["health"])
 app.include_router(crews.router, prefix="/api/crews", tags=["crews"])
 app.include_router(agents.router, prefix="/api/agents", tags=["agents"])
 app.include_router(runs.router, prefix="/api/runs", tags=["runs"])
+app.include_router(conversations.router, prefix="/api/conversations", tags=["conversations"])

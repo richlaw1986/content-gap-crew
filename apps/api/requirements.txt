@@ -5,6 +5,7 @@ pydantic>=2.5.0
 pydantic-settings>=2.1.0
 httpx>=0.26.0
 sse-starlette>=2.0.0
+websockets>=12.0
 
 # CrewAI
 crewai>=0.28.0

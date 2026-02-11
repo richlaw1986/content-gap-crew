@@ -156,75 +156,25 @@ const agents = [
     _id: 'agent-narrative-governor',
     _type: 'agent',
     name: 'Narrative Governor',
-    role: 'Content Strategy Director',
-    goal: 'Synthesize findings into coherent content strategy with prioritized recommendations',
-    backstory: SKILL_INSTRUCTION + 'Senior content strategist who excels at turning data into narrative. Creates compelling, actionable content roadmaps.',
+    role: 'Narrative Governor',
+    goal: 'Compress conversation history into the most salient facts, decisions, and open questions so downstream agents have concise, relevant context without token bloat.',
+    backstory:
+      'You are the memory governor for a multi-agent crew. Your sole job is to ' +
+      'read the outputs of prior tasks and produce a concise factual summary ' +
+      'for the next agent. Strip out pleasantries, repeated disclaimers, and ' +
+      'anything not directly relevant. Keep key decisions, data points, ' +
+      'assumptions, and unanswered questions. Never add your own analysis or ' +
+      'recommendations — just distil what has been said. You have no tools and ' +
+      'should never attempt to call any.',
     llmModel: 'gpt-5.2',
-    verbose: true,
-    allowDelegation: true,
+    verbose: false,
+    allowDelegation: false,
     tools: [],
   },
 ]
 
-// Create tasks
-const tasks = [
-  {
-    _id: 'task-data-analysis',
-    _type: 'task',
-    description: 'Analyze LLM visit data and search performance for the given topic. Identify which pages are getting AI traffic, trending topics, and performance gaps.',
-    expectedOutput: 'Data analysis report with: top pages by LLM visits, trending topics, GSC performance metrics, and identified opportunities.',
-    agent: {_type: 'reference', _ref: 'agent-data-analyst'},
-    order: 1,
-    contextTasks: [],
-  },
-  {
-    _id: 'task-competitive-analysis',
-    _type: 'task',
-    description: 'Research competitor content and community discussions. Identify what topics competitors cover that we don\'t, and what questions the community is asking.',
-    expectedOutput: 'Competitive analysis with: competitor content gaps, Reddit/community insights, and positioning opportunities.',
-    agent: {_type: 'reference', _ref: 'agent-product-marketer'},
-    order: 2,
-    contextTasks: [{_type: 'reference', _ref: 'task-data-analysis'}],
-  },
-  {
-    _id: 'task-seo-optimization',
-    _type: 'task',
-    description: 'Develop SEO and AEO optimization strategy based on data analysis and competitive research. Identify keyword opportunities and content optimization tactics.',
-    expectedOutput: 'SEO strategy with: target keywords, content optimization recommendations, and AEO tactics for AI search visibility.',
-    agent: {_type: 'reference', _ref: 'agent-seo-specialist'},
-    order: 3,
-    contextTasks: [
-      {_type: 'reference', _ref: 'task-data-analysis'},
-      {_type: 'reference', _ref: 'task-competitive-analysis'},
-    ],
-  },
-  {
-    _id: 'task-quality-review',
-    _type: 'task',
-    description: 'Review all analysis for accuracy, completeness, and actionability. Identify any gaps or inconsistencies that need to be addressed.',
-    expectedOutput: 'Quality review report with: validation of findings, identified gaps, and recommendations for improvement.',
-    agent: {_type: 'reference', _ref: 'agent-work-reviewer'},
-    order: 4,
-    contextTasks: [
-      {_type: 'reference', _ref: 'task-data-analysis'},
-      {_type: 'reference', _ref: 'task-competitive-analysis'},
-      {_type: 'reference', _ref: 'task-seo-optimization'},
-    ],
-  },
-  {
-    _id: 'task-final-synthesis',
-    _type: 'task',
-    description: 'Synthesize all findings into a coherent content strategy. Create prioritized recommendations with clear next steps.',
-    expectedOutput: 'Final content gap report with: executive summary, prioritized content recommendations, implementation roadmap, and success metrics.',
-    agent: {_type: 'reference', _ref: 'agent-narrative-governor'},
-    order: 5,
-    contextTasks: [
-      {_type: 'reference', _ref: 'task-quality-review'},
-    ],
-  },
-]
-
 // Create the crew
+// Note: Tasks are now generated dynamically by the crew planner, not pre-defined.
 const crew = {
   _id: 'crew-content-gap',
   _type: 'crew',
@@ -235,7 +185,6 @@ const crew = {
   memory: true,
   isDefault: true,
   agents: agents.map(a => ({_type: 'reference', _ref: a._id})),
-  tasks: tasks.map(t => ({_type: 'reference', _ref: t._id})),
   credentials: [], // Will be added when credentials are configured
   inputSchema: [
     {
@@ -277,24 +226,56 @@ const crewPlanner = {
   model: 'gpt-5.2',
   maxAgents: 6,
   process: 'sequential',
-  systemPrompt: `You are a crew planner.
-You receive: objective, inputs, and a list of agents (each has an _id, role, backstory, and tools).
+  systemPrompt: `You are a crew planner for a conversational AI team (like Slack).
+You receive: objective, inputs, and a list of agents.
 
-AGENT SELECTION RULES:
-- Pick ONLY agents whose role and backstory directly match the objective. Fewer, better-matched agents beat more agents.
-- Match by role, backstory, and tools — NOT by superficial keyword overlap (e.g. "Product Marketing Manager" is NOT a data scientist even though both relate to "marketing").
-- If no agent is a strong match for a task, assign the Data Analyst as a general-purpose analyst.
-- The Narrative Governor should only be included when the objective specifically involves content strategy or narrative synthesis.
-- Do NOT include agents just because they exist. Only include agents that will meaningfully contribute to the objective.
+RULE 1 — MATCH COMPLEXITY (most important rule):
+Classify the request FIRST, then plan accordingly.
 
-Return a JSON object with:
-- agents: array of exact _id values from the agents list (e.g. "agent-data-analyst"). Use only _id values that appear in the input.
-- tasks: array of {name, description, expectedOutput, agentId, order}. agentId MUST be an exact _id from the agents list.
-- process: "sequential" or "hierarchical"
-- inputSchema: array of {name,label,type,required,placeholder,helpText,defaultValue,options}
-- questions: array of clarifying questions to ask the user before running (strings)
+SIMPLE (direct question like "how do I implement ISR?", "what is SSR?", "explain K-means"):
+  → EXACTLY 1 agent, EXACTLY 1 task.
+  → Task description: the user's question verbatim + "Keep your answer concise and practical. Do not ask follow-up questions."
+  → expectedOutput: "A concise, practical answer in a few paragraphs. No more than 300 words."
+  → questions: [] (empty), inputSchema: [] (empty).
+  → DO NOT create multiple tasks. DO NOT add research/analysis/QA steps.
 
-IMPORTANT: Every agentId in tasks must exactly match one of the _id strings in the agents array you selected. Do not invent IDs. expectedOutput is required for every task. inputSchema must be an array.`,
+MODERATE (e.g. "compare ISR vs SSR for my e-commerce site", "create a migration plan"):
+  → Use the REVIEW LOOP pattern (see below). 2 agents, 3 tasks.
+  → questions: only if genuinely needed, max 2.
+
+COMPLEX (e.g. "create a content strategy for X", "analyze our content gaps across SEO and LLM traffic", "build an SEO plan for our product launch"):
+  → Use the REVIEW LOOP pattern with MORE specialist agents contributing.
+  → Structure: multiple agents each draft their section → reviewer consolidates feedback → lead agent produces final output.
+  → 3-4 agents. Each specialist contributes their perspective (e.g. SEO analysis, marketing positioning, data insights) BEFORE the review step.
+  → Ask clarifying questions (max 3) if the scope is unclear.
+
+REVIEW LOOP PATTERN (use for MODERATE and COMPLEX):
+When 2+ agents are involved, structure tasks as a draft→review→revise loop:
+  Task 1 (order: 1): PRIMARY agent drafts the deliverable.
+    description: "Draft [the deliverable]. Keep your answer concise and practical. Do not ask follow-up questions."
+    expectedOutput: describes the draft output, with word limit.
+  Task 2 (order: 2): REVIEWER agent reviews the draft and suggests improvements.
+    description: "Review the draft output from the previous task. Identify gaps, inaccuracies, or improvements. List specific, actionable suggestions. Do NOT rewrite the whole thing — just provide feedback. Do not use tools unless absolutely necessary for fact-checking."
+    expectedOutput: "A short list of specific improvements (max 200 words)."
+  Task 3 (order: 3): PRIMARY agent (same as Task 1) incorporates the review feedback.
+    description: "Incorporate the reviewer's feedback into your draft. Produce the final polished version. Keep your answer concise and practical. Do not ask follow-up questions."
+    expectedOutput: describes the final output, with word limit.
+
+RULE 2 — AGENT SELECTION:
+- Match by role and backstory, not keyword overlap.
+- Technical/code/framework questions → Technical SEO Specialist or most technical agent.
+- Content strategy / marketing plans → include Product Marketing Manager AND Technical SEO Specialist AND Data Analyst. These are cross-functional tasks that need multiple perspectives.
+- NEVER include the Narrative Governor (it's injected automatically).
+- Do NOT include agents just because they exist.
+- For the REVIEWER role, prefer Quality Assurance Reviewer if available, otherwise use a second relevant agent.
+
+RULE 3 — RESPONSE QUALITY:
+- ALWAYS include "Keep your answer concise and practical." in task descriptions.
+- ALWAYS include "Do not ask the user follow-up questions in your output." in task descriptions.
+- expectedOutput must specify a word limit appropriate to complexity.
+
+Return JSON: { agents: [_id strings], tasks: [{name, description, expectedOutput, agentId, order}], process: "sequential", inputSchema: [], questions: [] }
+Every agentId must match an _id from the agents list. expectedOutput is required. process MUST be "sequential" for review loops.`,
 }
 
 const memoryPolicy = {
@@ -360,12 +341,6 @@ async function seed() {
   for (const agent of agents) {
     await client.createOrReplace(agent)
     console.log(`  ✓ ${agent.name}`)
-  }
-
-  console.log('Creating tasks...')
-  for (const task of tasks) {
-    await client.createOrReplace(task)
-    console.log(`  ✓ Task ${task.order}: ${task.description.substring(0, 50)}...`)
   }
 
   console.log('Creating crew...')

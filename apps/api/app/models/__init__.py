@@ -2,6 +2,11 @@
 
 from app.models.sanity import (
     Agent,
+    ChatMessage,
+    ChatRequest,
+    ChatResponse,
+    Conversation,
+    ConversationMessage,
     Crew,
     Credential,
     InputField,
@@ -9,11 +14,17 @@ from app.models.sanity import (
     Run,
     RunInputs,
     Skill,
+    Task,
     Tool,
 )
 
 __all__ = [
     "Agent",
+    "ChatMessage",
+    "ChatRequest",
+    "ChatResponse",
+    "Conversation",
+    "ConversationMessage",
     "Crew",
     "Credential",
     "InputField",
@@ -21,5 +32,6 @@ __all__ = [
     "Run",
     "RunInputs",
     "Skill",
+    "Task",
     "Tool",
 ]

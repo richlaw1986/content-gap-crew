@@ -78,11 +78,13 @@ async function proxyRequest(request: NextRequest, path: string[]) {
     });
 
   } catch (error) {
-    console.error('Proxy error:', error);
+    const msg = error instanceof Error ? error.message : 'Unknown error';
+    console.error(`Proxy error forwarding ${request.method} ${targetUrl.toString()}: ${msg}`);
     return new Response(
       JSON.stringify({ 
         error: 'Backend unavailable',
-        message: error instanceof Error ? error.message : 'Unknown error'
+        detail: `Could not reach FastAPI at ${FASTAPI_URL}. Is the backend running?`,
+        message: msg,
       }),
       { 
         status: 502,

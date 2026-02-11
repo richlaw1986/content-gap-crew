@@ -1,6 +1,6 @@
 /**
  * API client for communicating with the FastAPI backend.
- * 
+ *
  * Uses same-origin proxy routes by default (/api/*) to keep auth cookies
  * on the same domain. Server-side requests go directly to FASTAPI_URL.
  */
@@ -12,20 +12,17 @@ export class ApiError extends Error {
     message: string,
     public status: number,
     public statusText: string,
-    public body?: unknown
+    public body?: unknown,
   ) {
     super(message);
     this.name = 'ApiError';
   }
 }
 
-export async function fetchApi<T>(
-  endpoint: string,
-  options?: RequestInit
-): Promise<T> {
+export async function fetchApi<T>(endpoint: string, options?: RequestInit): Promise<T> {
   const baseUrl = getApiUrl();
   const url = `${baseUrl}${endpoint}`;
-  
+
   const response = await fetch(url, {
     ...options,
     credentials: 'include',
@@ -42,13 +39,7 @@ export async function fetchApi<T>(
     } catch {
       body = await response.text();
     }
-    
-    throw new ApiError(
-      `API error: ${response.status} ${response.statusText}`,
-      response.status,
-      response.statusText,
-      body
-    );
+    throw new ApiError(`API error: ${response.status} ${response.statusText}`, response.status, response.statusText, body);
   }
 
   const contentType = response.headers.get('content-type');
@@ -88,6 +79,34 @@ export interface Run {
   finalOutput?: string;
 }
 
+export interface ConversationSummary {
+  _id: string;
+  title: string;
+  status: 'active' | 'awaiting_input' | 'completed' | 'failed';
+  _createdAt: string;
+  messageCount: number;
+  runCount: number;
+  lastMessage?: string;
+}
+
+export interface ConversationDetail {
+  _id: string;
+  title: string;
+  status: string;
+  messages: Array<{
+    _key: string;
+    sender: string;
+    agentId?: string;
+    type: string;
+    content: string;
+    metadata?: Record<string, unknown>;
+    timestamp: string;
+  }>;
+  runs: string[];
+  activeRunId?: string;
+  _createdAt: string;
+}
+
 export interface Crew {
   id: string;
   name: string;
@@ -102,30 +121,17 @@ export interface Agent {
   goal: string;
 }
 
-export interface ChatMessage {
-  role: 'user' | 'assistant';
-  content: string;
-}
-
-export interface ChatRequest {
-  messages: ChatMessage[];
-}
-
-export interface ChatResponse {
-  message: ChatMessage;
-}
-
 // =============================================================================
 // API methods
 // =============================================================================
 
 export const api = {
   health: () => fetchApi<{ status: string }>('/api/health'),
-  
+
   runs: {
-    create: (data: CreateRunRequest) => 
-      fetchApi<Run>('/api/runs', { 
-        method: 'POST', 
+    create: (data: CreateRunRequest) =>
+      fetchApi<Run>('/api/runs', {
+        method: 'POST',
         body: JSON.stringify(data),
       }),
 
@@ -135,11 +141,21 @@ export const api = {
         body: JSON.stringify({ inputs }),
       }),
 
-    get: (id: string) => 
-      fetchApi<Run>(`/api/runs/${id}`),
+    get: (id: string) => fetchApi<Run>(`/api/runs/${id}`),
 
-    list: () => 
-      fetchApi<Run[]>('/api/runs'),
+    list: () => fetchApi<Run[]>('/api/runs'),
+  },
+
+  conversations: {
+    create: (title?: string) =>
+      fetchApi<{ id: string; status: string; title: string }>('/api/conversations', {
+        method: 'POST',
+        body: JSON.stringify({ title }),
+      }),
+
+    get: (id: string) => fetchApi<ConversationDetail>(`/api/conversations/${id}`),
+
+    list: () => fetchApi<ConversationSummary[]>('/api/conversations'),
   },
 
   crews: {
@@ -150,10 +166,4 @@ export const api = {
   agents: {
     list: () => fetchApi<Agent[]>('/api/agents'),
   },
-
-  chat: (data: ChatRequest) =>
-    fetchApi<ChatResponse>('/api/chat', {
-      method: 'POST',
-      body: JSON.stringify(data),
-    }),
 };

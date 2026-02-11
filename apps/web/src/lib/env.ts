@@ -109,3 +109,29 @@ export function getApiUrl(): string {
   // Server-side: use internal FastAPI URL
   return getServerEnv().FASTAPI_URL;
 }
+
+/**
+ * Returns the WebSocket-capable URL for the FastAPI backend.
+ *
+ * The Next.js proxy route handles HTTP but NOT WebSocket upgrades,
+ * so WS connections must go directly to FastAPI.
+ *
+ * Priority:
+ *  1. NEXT_PUBLIC_WS_URL  (explicit override, e.g. wss://prod.example.com)
+ *  2. NEXT_PUBLIC_API_URL  converted from http→ws
+ *  3. ws://localhost:8000  (local dev default)
+ */
+export function getWsUrl(): string {
+  if (typeof window !== 'undefined') {
+    const explicit = process.env.NEXT_PUBLIC_WS_URL;
+    if (explicit) return explicit;
+
+    const apiUrl = clientEnv.NEXT_PUBLIC_API_URL;
+    if (apiUrl) return apiUrl.replace(/^http/, 'ws');
+
+    // Local dev: FastAPI backend default
+    return 'ws://localhost:8000';
+  }
+  // Server-side (shouldn't need WS, but just in case)
+  return getServerEnv().FASTAPI_URL.replace(/^http/, 'ws');
+}

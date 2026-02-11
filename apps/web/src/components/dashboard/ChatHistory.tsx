@@ -1,19 +1,29 @@
 'use client';
 
 import { useState } from 'react';
-import type { Conversation } from '@/lib/hooks/useChatHistory';
+
+// =============================================================================
+// Types — a conversation item in the sidebar
+// =============================================================================
+
+export interface SidebarConversation {
+  id: string;
+  title: string;
+  status: 'active' | 'awaiting_input' | 'completed' | 'failed';
+  createdAt: string;
+}
 
 // =============================================================================
 // Helpers
 // =============================================================================
 
-function groupByDate(conversations: Conversation[]) {
+function groupByDate(conversations: SidebarConversation[]) {
   const now = new Date();
   const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
   const yesterday = new Date(today.getTime() - 86_400_000);
   const week = new Date(today.getTime() - 7 * 86_400_000);
 
-  const groups: { label: string; items: Conversation[] }[] = [
+  const groups: { label: string; items: SidebarConversation[] }[] = [
     { label: 'Today', items: [] },
     { label: 'Yesterday', items: [] },
     { label: 'Previous 7 days', items: [] },
@@ -43,7 +53,7 @@ const STATUS_DOT: Record<string, string> = {
 // =============================================================================
 
 interface ChatHistoryProps {
-  conversations: Conversation[];
+  conversations: SidebarConversation[];
   activeId: string | null;
   onSelect: (id: string) => void;
   onNew: () => void;
@@ -64,7 +74,6 @@ export function ChatHistory({
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   const groups = groupByDate(conversations);
 
-  // ── Collapsed strip ─────────────────────────────────────────
   if (collapsed) {
     return (
       <div className="w-12 flex flex-col items-center py-3 gap-3 border-r border-border bg-surface">
@@ -93,10 +102,8 @@ export function ChatHistory({
     );
   }
 
-  // ── Expanded sidebar ────────────────────────────────────────
   return (
     <div className="w-64 flex flex-col border-r border-border bg-surface h-full">
-      {/* Header */}
       <div className="flex items-center justify-between px-3 py-3 border-b border-border">
         <button
           onClick={onToggle}
@@ -121,7 +128,6 @@ export function ChatHistory({
         </button>
       </div>
 
-      {/* Conversation list */}
       <div className="flex-1 overflow-y-auto py-2">
         {groups.length === 0 ? (
           <div className="px-4 py-8 text-center">
@@ -150,17 +156,12 @@ export function ChatHistory({
                   onMouseEnter={() => setHoveredId(conv.id)}
                   onMouseLeave={() => setHoveredId(null)}
                 >
-                  {/* Status dot */}
                   <span
                     className={`w-1.5 h-1.5 rounded-full shrink-0 ${
                       STATUS_DOT[conv.status] || 'bg-gray-400'
                     }`}
                   />
-
-                  {/* Title */}
                   <span className="text-sm truncate flex-1">{conv.title}</span>
-
-                  {/* Delete button (visible on hover) */}
                   {hoveredId === conv.id && (
                     <button
                       onClick={(e) => {
