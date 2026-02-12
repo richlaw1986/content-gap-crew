@@ -7,6 +7,12 @@ import { getWsUrl } from '../env';
 // Types — matches the WebSocket protocol from the backend
 // =============================================================================
 
+export interface QuestionOption {
+  value: string;
+  label: string;
+  description?: string;
+}
+
 export interface ConversationMessage {
   id: string;
   type:
@@ -24,6 +30,10 @@ export interface ConversationMessage {
   sender: string;
   content: string;
   questionId?: string;
+  /** For `question` messages: structured options (radio/checkbox) */
+  options?: QuestionOption[];
+  /** For `question` messages: "radio" (single) or "checkbox" (multi) */
+  selectionType?: 'radio' | 'checkbox';
   tool?: string;
   args?: Record<string, unknown>;
   result?: string;

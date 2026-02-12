@@ -107,8 +107,8 @@ export default function DashboardPage() {
   );
 
   const handleSendAnswer = useCallback(
-    (content: string) => {
-      sendAnswer(content);
+    (content: string, questionId?: string) => {
+      sendAnswer(content, questionId);
     },
     [sendAnswer],
   );

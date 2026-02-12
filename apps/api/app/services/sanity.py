@@ -95,12 +95,20 @@ class SanityClient:
     # ── Crew / Agent queries ──────────────────────────────
 
     async def list_crews(self) -> list[dict[str, Any]]:
-        query = """*[_type == "crew"] {
+        query = """*[_type == "crew" && enabled == true] {
             _id,
             name,
+            displayName,
             slug,
             description,
             "agentCount": count(agents)
+        }"""
+        return await self._query(query) or []
+
+    async def list_all_skills(self) -> list[dict[str, Any]]:
+        """Return all enabled skills (no search filter)."""
+        query = """*[_type == "skill" && enabled == true] | order(_updatedAt desc) {
+            _id, name, description, steps, tags, toolsRequired, inputSchema, outputSchema
         }"""
         return await self._query(query) or []
 
@@ -457,7 +465,10 @@ class StubSanityClient:
     # ── Crew / Agent stubs ────────────────────────────────
 
     async def list_crews(self) -> list[dict[str, Any]]:
-        return [{"_id": "crew-content-gap", "name": "Content Gap Discovery Crew", "slug": "content-gap-discovery", "description": "Analyzes content gaps", "agentCount": 5}]
+        return [{"_id": "crew-content-gap", "name": "Content Gap Discovery Crew", "displayName": "Content Gap Analysis", "slug": "content-gap-discovery", "description": "Analyzes content gaps", "agentCount": 5}]
+
+    async def list_all_skills(self) -> list[dict[str, Any]]:
+        return [{"_id": "skill-eeat-audit", "name": "EEAT Audit", "description": "Assess content quality using EEAT.", "steps": [], "tags": ["seo"], "toolsRequired": [], "inputSchema": [], "outputSchema": "EEAT score"}]
 
     async def list_agents(self) -> list[dict[str, Any]]:
         return [

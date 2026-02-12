@@ -411,6 +411,44 @@ async def conversation_ws(websocket: WebSocket, conversation_id: str):
             except Exception:
                 pass  # websocket may already be closed
 
+    async def _ask_user(content: str, **extra) -> str:
+        """Send a question to the user and wait for their answer.
+
+        Extra kwargs (e.g. options, selectionType) are forwarded to the
+        WS message so the frontend can render rich selection UI.
+        """
+        q_id = _msg_key()
+        msg: dict[str, Any] = {
+            "type": "question",
+            "sender": "system",
+            "content": content,
+            "questionId": q_id,
+            "timestamp": _now(),
+            **extra,
+        }
+        await send(msg)
+        await sanity.append_message(conversation_id, {
+            "_key": _msg_key(),
+            "sender": "system",
+            "type": "question",
+            "content": content,
+            "timestamp": _now(),
+        })
+        await sanity.update_conversation_status(conversation_id, "awaiting_input")
+
+        future: asyncio.Future[str] = asyncio.get_event_loop().create_future()
+        pending_questions[q_id] = future
+        try:
+            answer = await asyncio.wait_for(future, timeout=600)  # 10 min
+        except asyncio.TimeoutError:
+            await send({"type": "error", "message": "Timed out waiting for answer", "timestamp": _now()})
+            raise
+        finally:
+            pending_questions.pop(q_id, None)
+
+        await sanity.update_conversation_status(conversation_id, "active")
+        return answer
+
     async def _run_crew_inner(objective: str, user_inputs: dict[str, Any]):
         """Inner implementation — errors bubble up to _run_crew wrapper."""
         nonlocal pending_questions
@@ -435,8 +473,6 @@ async def conversation_ws(websocket: WebSocket, conversation_id: str):
         # ── Build conversation context for continuity ─────────
         conversation_context = await _build_conversation_context()
 
-        # If there's prior conversation, prepend it to the objective so
-        # both the planner and agents know what happened before.
         enriched_objective = objective
         if conversation_context:
             enriched_objective = (
@@ -445,6 +481,118 @@ async def conversation_ws(websocket: WebSocket, conversation_id: str):
                 f"---\n\n"
                 f"NEW USER REQUEST:\n{objective}"
             )
+
+        # ── Step 1: Crew selection ────────────────────────────
+        # Present available crews to the user so they can pick one
+        # or let the planner decide.  Skip if no crews exist.
+        available_crews = await sanity.list_crews()
+        selected_crew_id: str | None = None  # None = planner decides
+
+        if available_crews:
+            crew_options = [
+                {
+                    "value": c["_id"],
+                    "label": c.get("displayName") or c["name"],
+                    "description": (c.get("description") or "")[:120],
+                }
+                for c in available_crews
+            ]
+            crew_options.append({
+                "value": "__planner__",
+                "label": "Let AI decide",
+                "description": "The planner will assemble a custom crew for this task",
+            })
+
+            try:
+                crew_answer = await _ask_user(
+                    "Would you like to use an existing crew, or let the AI planner assemble one?",
+                    options=crew_options,
+                    selectionType="radio",
+                )
+            except asyncio.TimeoutError:
+                return
+
+            crew_answer = crew_answer.strip()
+            if crew_answer and crew_answer != "__planner__":
+                # Verify the selected crew exists
+                if any(c["_id"] == crew_answer for c in available_crews):
+                    selected_crew_id = crew_answer
+
+        # ── Step 2: Skill selection ───────────────────────────
+        # Search for skills relevant to the objective and let the
+        # user pick which ones (if any) to apply.
+        all_skills = await sanity.list_all_skills()
+        selected_skills: list[dict[str, Any]] = []
+
+        if all_skills:
+            # Also try a keyword search for more relevant results
+            keywords = objective.split()[:5]
+            keyword_str = " ".join(keywords)
+            searched_skills = await sanity.search_skills(query=keyword_str, limit=10)
+            # Merge and deduplicate
+            seen_ids = set()
+            merged_skills = []
+            for s in (searched_skills + all_skills):
+                if s["_id"] not in seen_ids:
+                    seen_ids.add(s["_id"])
+                    merged_skills.append(s)
+
+            if merged_skills:
+                skill_options = [
+                    {
+                        "value": s["_id"],
+                        "label": s["name"],
+                        "description": (s.get("description") or "")[:120],
+                    }
+                    for s in merged_skills
+                ]
+                skill_options.append({
+                    "value": "__none__",
+                    "label": "None — skip skills",
+                    "description": "Proceed without applying any predefined skill playbooks",
+                })
+
+                try:
+                    skill_answer = await _ask_user(
+                        "Found skill playbooks that may be useful. Select any to apply (or skip):",
+                        options=skill_options,
+                        selectionType="checkbox",
+                    )
+                except asyncio.TimeoutError:
+                    return
+
+                # Parse answer: could be a JSON array, comma-separated IDs,
+                # or a single value.
+                if skill_answer.strip() != "__none__":
+                    try:
+                        picked = json.loads(skill_answer)
+                        if isinstance(picked, list):
+                            picked_ids = set(picked)
+                        else:
+                            picked_ids = {str(picked)}
+                    except (json.JSONDecodeError, ValueError):
+                        picked_ids = {s.strip() for s in skill_answer.split(",") if s.strip()}
+
+                    picked_ids.discard("__none__")
+                    selected_skills = [s for s in merged_skills if s["_id"] in picked_ids]
+
+        # ── Inject skill context into objective ───────────────
+        if selected_skills:
+            skill_block = "\n\nSKILL PLAYBOOKS TO FOLLOW:\n"
+            for sk in selected_skills:
+                steps_text = ""
+                if sk.get("steps"):
+                    steps_text = "\n  Steps: " + " → ".join(sk["steps"])
+                skill_block += f"- {sk['name']}: {sk.get('description', '')}{steps_text}\n"
+            enriched_objective += skill_block
+
+        # ── Resolve crew agents if a fixed crew was selected ──
+        fixed_crew_obj: Crew | None = None
+        if selected_crew_id:
+            fixed_crew_obj = await sanity.get_crew(selected_crew_id)
+            if fixed_crew_obj and fixed_crew_obj.agents:
+                # Use only this crew's agents for the planner
+                agents = [a.model_dump(by_alias=True) for a in fixed_crew_obj.agents]
 
         # ── Planning phase ──────────────────────────────────
         await send({"type": "system", "content": "Planning your workflow...", "timestamp": _now()})
@@ -460,38 +608,15 @@ async def conversation_ws(websocket: WebSocket, conversation_id: str):
 
         if all_questions:
             combined_q = "\n- ".join(all_questions)
-            q_id = _msg_key()
-            await send({
-                "type": "question",
-                "sender": "Planner",
-                "content": f"Clarifying questions:\n- {combined_q}",
-                "questionId": q_id,
-                "timestamp": _now(),
-            })
-            await sanity.append_message(conversation_id, {
-                "_key": _msg_key(),
-                "sender": "planner",
-                "type": "question",
-                "content": f"Clarifying questions:\n- {combined_q}",
-                "timestamp": _now(),
-            })
-            await sanity.update_conversation_status(conversation_id, "awaiting_input")
-
-            # Wait for the user's answer (delivered via the WS receive loop)
-            future: asyncio.Future[str] = asyncio.get_event_loop().create_future()
-            pending_questions[q_id] = future
             try:
-                answer = await asyncio.wait_for(future, timeout=600)  # 10 min
+                answer = await _ask_user(
+                    f"Clarifying questions:\n- {combined_q}",
+                )
             except asyncio.TimeoutError:
-                await send({"type": "error", "message": "Timed out waiting for answer", "timestamp": _now()})
                 return
-            finally:
-                pending_questions.pop(q_id, None)
 
-            # Enrich objective with user's answers to clarifying questions
             enriched_objective = f"{enriched_objective}\n\nAdditional context from user:\n{answer}"
             user_inputs["clarification"] = answer
-            await sanity.update_conversation_status(conversation_id, "active")
 
         # ── Resolve agents / build crew ─────────────────────
         def _resolve(raw_id: str) -> str | None:
@@ -517,7 +642,6 @@ async def conversation_ws(websocket: WebSocket, conversation_id: str):
             planned_agents = [Agent(**a) for a in agents if a.get("_id") in resolved_ids]
         except Exception as agent_err:
             logger.warning(f"Agent validation failed, attempting to sanitize: {agent_err}")
-            # Retry with sanitized data — coerce None lists to []
             sanitized = []
             for a in agents:
                 if a.get("_id") not in resolved_ids:
@@ -583,15 +707,21 @@ async def conversation_ws(websocket: WebSocket, conversation_id: str):
         raw_credentials = await sanity.get_all_credentials()
         crew_credentials = [Credential(**c) for c in raw_credentials]
 
+        crew_name = "Planned Crew"
+        crew_process = plan.process
+        if fixed_crew_obj:
+            crew_name = fixed_crew_obj.display_name or fixed_crew_obj.name
+            crew_process = fixed_crew_obj.process or plan.process
+
         planned_crew = Crew(
-            _id="crew-planned",
-            name="Planned Crew",
-            displayName="Planned Crew",
+            _id=selected_crew_id or "crew-planned",
+            name=crew_name,
+            displayName=crew_name,
             description=enriched_objective,
             agents=planned_agents,
             tasks=planned_tasks,
-            process=plan.process,
-            memory=False,
+            process=crew_process,
+            memory=fixed_crew_obj.memory_enabled if fixed_crew_obj else False,
             credentials=crew_credentials,
         )
 

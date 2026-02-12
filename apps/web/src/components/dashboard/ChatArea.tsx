@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { MarkdownContent } from './MarkdownContent';
 import { parseArtifacts, type Artifact } from '@/lib/parseArtifacts';
-import type { ConversationMessage } from '@/lib/hooks/useConversation';
+import type { ConversationMessage, QuestionOption } from '@/lib/hooks/useConversation';
 
 interface ChatAreaProps {
   messages?: ConversationMessage[];
@@ -11,7 +11,7 @@ interface ChatAreaProps {
   isRunning?: boolean;
   awaitingInput?: boolean;
   onSendMessage?: (content: string) => void;
-  onSendAnswer?: (content: string) => void;
+  onSendAnswer?: (content: string, questionId?: string) => void;
 }
 
 const WELCOME_MESSAGE: ConversationMessage = {
@@ -110,6 +110,124 @@ function ArtifactCard({ artifact }: { artifact: Artifact }) {
   );
 }
 
+// ── Selection question (radio / checkbox) ──────────────────────
+
+function SelectionQuestion({
+  msg,
+  onSubmit,
+}: {
+  msg: ConversationMessage;
+  onSubmit: (value: string, questionId?: string) => void;
+}) {
+  const isRadio = msg.selectionType !== 'checkbox';
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [submitted, setSubmitted] = useState(false);
+
+  const toggle = (value: string) => {
+    if (submitted) return;
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (isRadio) {
+        // Radio: single select — replace
+        return new Set([value]);
+      }
+      // Checkbox: toggle
+      if (next.has(value)) next.delete(value);
+      else next.add(value);
+      return next;
+    });
+  };
+
+  const handleSubmit = () => {
+    if (selected.size === 0) return;
+    setSubmitted(true);
+    const answer = isRadio
+      ? [...selected][0]
+      : JSON.stringify([...selected]);
+    onSubmit(answer, msg.questionId);
+  };
+
+  const options = msg.options || [];
+
+  return (
+    <div className="flex justify-start mt-3">
+      <div className="max-w-2xl mr-12 w-full">
+        <div className="text-xs font-medium mb-1 ml-1 flex items-center gap-1.5 text-indigo-600 dark:text-indigo-400">
+          <span>❓</span>
+          <span>{msg.sender}</span>
+        </div>
+        <div className="rounded-2xl px-4 py-3 text-sm leading-relaxed bg-amber-50 dark:bg-amber-950/20 text-amber-900 dark:text-amber-200">
+          <p className="mb-3 font-medium">{msg.content}</p>
+          <div className="space-y-2">
+            {options.map((opt) => {
+              const isSelected = selected.has(opt.value);
+              return (
+                <button
+                  key={opt.value}
+                  onClick={() => toggle(opt.value)}
+                  disabled={submitted}
+                  className={`w-full text-left flex items-start gap-3 px-3 py-2.5 rounded-xl border transition-all ${
+                    isSelected
+                      ? 'border-indigo-400 bg-indigo-50 dark:bg-indigo-950/30 dark:border-indigo-500'
+                      : 'border-border/40 bg-white/50 dark:bg-white/5 hover:border-border'
+                  } ${submitted ? 'opacity-70 cursor-default' : 'cursor-pointer'}`}
+                >
+                  {/* Radio / Checkbox indicator */}
+                  <span className="mt-0.5 shrink-0">
+                    {isRadio ? (
+                      <span
+                        className={`inline-block w-4 h-4 rounded-full border-2 ${
+                          isSelected
+                            ? 'border-indigo-500 bg-indigo-500'
+                            : 'border-gray-400 dark:border-gray-500'
+                        }`}
+                      >
+                        {isSelected && (
+                          <span className="block w-2 h-2 rounded-full bg-white mx-auto mt-[3px]" />
+                        )}
+                      </span>
+                    ) : (
+                      <span
+                        className={`inline-flex items-center justify-center w-4 h-4 rounded border-2 text-[10px] font-bold ${
+                          isSelected
+                            ? 'border-indigo-500 bg-indigo-500 text-white'
+                            : 'border-gray-400 dark:border-gray-500'
+                        }`}
+                      >
+                        {isSelected && '✓'}
+                      </span>
+                    )}
+                  </span>
+                  <div className="min-w-0">
+                    <div className="font-medium text-sm text-foreground">{opt.label}</div>
+                    {opt.description && (
+                      <div className="text-xs text-muted-foreground mt-0.5 line-clamp-2">{opt.description}</div>
+                    )}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+          {!submitted && (
+            <button
+              onClick={handleSubmit}
+              disabled={selected.size === 0}
+              className="mt-3 px-4 py-2 text-sm font-medium rounded-xl bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-default transition-colors"
+            >
+              {isRadio ? 'Continue' : `Apply${selected.size > 0 ? ` (${selected.size})` : ''}`}
+            </button>
+          )}
+          {submitted && (
+            <div className="mt-2 text-xs text-muted-foreground italic">
+              ✓ Selection submitted
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Helpers ────────────────────────────────────────────────────
 
 function summarize(content: string, fallback: string): string {
@@ -142,12 +260,22 @@ export function ChatArea({
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [displayMessages.length]);
 
+  // Find the latest unanswered question's ID for the text input fallback
+  const latestQuestionId = useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].type === 'question' && messages[i].questionId) {
+        return messages[i].questionId;
+      }
+    }
+    return undefined;
+  }, [messages]);
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!input.trim()) return;
 
     if (awaitingInput) {
-      onSendAnswer?.(input.trim());
+      onSendAnswer?.(input.trim(), latestQuestionId);
     } else {
       onSendMessage?.(input.trim());
     }
@@ -263,6 +391,17 @@ export function ChatArea({
 
           // ── Questions ──
           if (isQuestion) {
+            // Structured selection (crew / skill picker)
+            if (msg.options && msg.options.length > 0) {
+              return (
+                <SelectionQuestion
+                  key={msg.id}
+                  msg={msg}
+                  onSubmit={(value, qId) => onSendAnswer?.(value, qId)}
+                />
+              );
+            }
+            // Free-text question (clarifying questions etc.)
             return (
               <div key={msg.id} className="flex justify-start mt-3">
                 <div className="max-w-2xl mr-12">
