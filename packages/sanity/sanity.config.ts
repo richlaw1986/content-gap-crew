@@ -2,6 +2,7 @@ import {defineConfig} from 'sanity'
 import {structureTool} from 'sanity/structure'
 import {visionTool} from '@sanity/vision'
 import {schemaTypes} from './schemas'
+import {chatTool} from 'sanity-plugin-chat'
 
 export default defineConfig({
   name: 'content-gap-crew',
@@ -14,6 +15,7 @@ export default defineConfig({
   plugins: [
     structureTool(),
     visionTool(),
+    chatTool(),
   ],
 
   schema: {

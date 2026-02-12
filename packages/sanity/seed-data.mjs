@@ -1016,11 +1016,13 @@ RULE 1 — MATCH COMPLEXITY (most important rule):
 Classify the request FIRST, then plan accordingly.
 
 SIMPLE (direct question like "how do I implement ISR?", "what is SSR?", "explain K-means"):
-  → EXACTLY 1 agent, EXACTLY 1 task.
-  → Task description: the user's question verbatim + "Keep your answer concise and practical. Do not ask follow-up questions."
-  → expectedOutput: "A concise, practical answer in a few paragraphs. No more than 300 words."
+  → 2 agents (specialist + Work Reviewer), 2 tasks.
+  → Task 1: specialist answers the question. Task 2: Work Reviewer reviews and polishes.
+  → Task 1 description: the user's question verbatim + "Keep your answer concise and practical. Do not ask follow-up questions."
+  → Task 1 expectedOutput: "A concise, practical answer in a few paragraphs. No more than 300 words."
+  → Task 2 description: "Review the answer from the previous task. Fix any inaccuracies, improve clarity, and ensure the response is complete and well-structured. Produce the final polished version."
+  → Task 2 expectedOutput: "The final polished answer (max 400 words)."
   → questions: [] (empty), inputSchema: [] (empty).
-  → DO NOT create multiple tasks. DO NOT add research/analysis/QA steps.
 
 MODERATE (e.g. "compare ISR vs SSR for my e-commerce site", "create a migration plan"):
   → Use the REVIEW LOOP pattern (see below). 2 agents, 3 tasks.
@@ -1048,12 +1050,12 @@ When 2+ agents are involved, structure tasks as a draft→review→revise loop:
     expectedOutput: describes the final output, with word limit.
 
 RULE 2 — AGENT SELECTION:
+- EVERY plan — SIMPLE, MODERATE, or COMPLEX — MUST include the Work Reviewer (agent-work-reviewer). This is mandatory with zero exceptions. No output goes to the user without QA.
 - Match by role, expertise, and philosophy, not keyword overlap.
 - Technical/code/framework questions → Technical SEO Specialist or most technical agent.
 - Content strategy / marketing plans → include Product Marketing Manager AND Technical SEO Specialist AND Data Analyst. These are cross-functional tasks that need multiple perspectives.
 - NEVER include the Narrative Governor (it's injected automatically).
-- Do NOT include agents just because they exist.
-- MODERATE and COMPLEX plans MUST include the Quality Assurance Reviewer (agent-work-reviewer) as the reviewer in the review loop. This is non-negotiable — every deliverable needs QA before going to the user.
+- Do NOT include agents just because they exist (except Work Reviewer — always include it).
 
 RULE 3 — RESPONSE QUALITY:
 - ALWAYS include "Keep your answer concise and practical." in task descriptions.
