@@ -2,68 +2,90 @@ import {defineType, defineField} from 'sanity'
 
 /**
  * Tool Schema
- * 
- * Represents a CrewAI tool that agents can use.
- * Each tool declares which credential types it requires.
- * 
- * Source tools (14 total):
- * - bigquery_describe_table (requires: bigquery)
- * - bigquery_llm_visits (requires: bigquery)
- * - bigquery_custom_query (requires: bigquery)
- * - sitemap_lookup (no auth)
- * - content_audit (no auth)
- * - gsc_performance_lookup (requires: gsc)
- * - google_ads_keyword_ideas (requires: google_ads)
- * - reddit_discussion_lookup (requires: reddit)
- * - openai_query_fanout (requires: openai)
- * - top_google_search_pages (no auth)
- * - top_aeo_pages (no auth)
- * - fetch_webpage_content (no auth)
- * - fetch_and_compare_urls (no auth)
- * - competitor_content_gaps (no auth)
+ *
+ * Represents a tool that agents can use. Tools can be:
+ * - **builtin**: Implemented in Python (the `name` field maps to a function in the backend registry)
+ * - **http**: A declarative HTTP API call — configured entirely from the Studio, no deploy needed
+ *
+ * MCP tools are discovered dynamically via `mcpServer` documents and don't appear here.
  */
 export default defineType({
   name: 'tool',
   title: 'Tool',
   type: 'document',
+  groups: [
+    {name: 'basic', title: 'Basic', default: true},
+    {name: 'http', title: 'HTTP Config'},
+    {name: 'advanced', title: 'Advanced'},
+  ],
   fields: [
+    // ── Basic ──────────────────────────────────────────────
     defineField({
       name: 'name',
       title: 'Name',
       type: 'string',
-      description: 'Function name matching the Python tool (e.g., "bigquery_llm_visits")',
-      validation: (Rule) => Rule.required().regex(/^[a-z][a-z0-9_]*$/, {
-        name: 'snake_case',
-        invert: false,
-      }).error('Name must be snake_case'),
+      group: 'basic',
+      description: 'Unique function name (snake_case). For builtin tools this must match the Python function.',
+      validation: (Rule) =>
+        Rule.required()
+          .regex(/^[a-z][a-z0-9_]*$/, {name: 'snake_case', invert: false})
+          .error('Name must be snake_case'),
     }),
     defineField({
       name: 'displayName',
       title: 'Display Name',
       type: 'string',
+      group: 'basic',
       description: 'Human-readable name for the UI',
     }),
     defineField({
       name: 'description',
       title: 'Description',
       type: 'text',
-      description: 'What this tool does - shown to agents and in the UI',
+      group: 'basic',
+      description: 'What this tool does — shown to agents so they know when to use it',
+      validation: (Rule) => Rule.required(),
+    }),
+    defineField({
+      name: 'implementationType',
+      title: 'Implementation',
+      type: 'string',
+      group: 'basic',
+      description: 'How this tool runs. Builtin = Python code in the backend. HTTP = declarative API call configured below.',
+      initialValue: 'builtin',
+      options: {
+        list: [
+          {title: 'Built-in (Python)', value: 'builtin'},
+          {title: 'HTTP API Call', value: 'http'},
+        ],
+        layout: 'radio',
+      },
       validation: (Rule) => Rule.required(),
     }),
     defineField({
       name: 'credentialTypes',
       title: 'Required Credential Types',
       type: 'array',
+      group: 'basic',
       of: [{type: 'string'}],
-      description: 'Credential types this tool needs (e.g., ["bigquery", "gsc"])',
+      description: 'Credential types this tool needs (e.g., ["bigquery", "gsc"]). For HTTP tools, credentials are injected as headers/params.',
       options: {
         list: [
           {title: 'Anthropic', value: 'anthropic'},
           {title: 'BigQuery', value: 'bigquery'},
+          {title: 'Brave Search', value: 'brave'},
+          {title: 'Clearbit', value: 'clearbit'},
+          {title: 'GitHub', value: 'github'},
           {title: 'Google Ads', value: 'google_ads'},
+          {title: 'Google API Key', value: 'google_api'},
           {title: 'Google Search Console', value: 'gsc'},
+          {title: 'Hunter.io', value: 'hunter'},
           {title: 'OpenAI', value: 'openai'},
           {title: 'Reddit', value: 'reddit'},
+          {title: 'Sanity', value: 'sanity'},
+          {title: 'Semrush', value: 'semrush'},
+          {title: 'SerpApi', value: 'serpapi'},
+          {title: 'Slack', value: 'slack'},
         ],
       },
     }),
@@ -71,6 +93,8 @@ export default defineType({
       name: 'parameters',
       title: 'Parameters',
       type: 'array',
+      group: 'basic',
+      description: 'Input parameters the agent must provide when calling this tool',
       of: [
         {
           type: 'object',
@@ -85,9 +109,7 @@ export default defineType({
               name: 'type',
               title: 'Type',
               type: 'string',
-              options: {
-                list: ['string', 'number', 'boolean', 'array'],
-              },
+              options: {list: ['string', 'number', 'boolean', 'array']},
               validation: (Rule) => Rule.required(),
             }),
             defineField({
@@ -109,18 +131,83 @@ export default defineType({
             }),
           ],
           preview: {
-            select: {
-              title: 'name',
-              subtitle: 'type',
-            },
+            select: {title: 'name', subtitle: 'type'},
           },
         },
       ],
     }),
+
+    // ── HTTP Configuration ─────────────────────────────────
+    defineField({
+      name: 'httpConfig',
+      title: 'HTTP Configuration',
+      type: 'object',
+      group: 'http',
+      hidden: ({parent}) => parent?.implementationType !== 'http',
+      description: 'Configure how this tool calls an external HTTP API. Use {{paramName}} placeholders in URL and body templates.',
+      fields: [
+        defineField({
+          name: 'method',
+          title: 'HTTP Method',
+          type: 'string',
+          initialValue: 'GET',
+          options: {
+            list: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
+            layout: 'radio',
+          },
+          validation: (Rule) => Rule.required(),
+        }),
+        defineField({
+          name: 'urlTemplate',
+          title: 'URL Template',
+          type: 'string',
+          description: 'URL with {{param}} placeholders, e.g. https://api.example.com/search?q={{query}}&limit={{limit}}',
+          validation: (Rule) => Rule.required(),
+        }),
+        defineField({
+          name: 'headers',
+          title: 'Headers',
+          type: 'array',
+          description: 'Static headers sent with every request. Use {{credential.fieldName}} for credential injection.',
+          of: [
+            {
+              type: 'object',
+              fields: [
+                defineField({name: 'key', title: 'Header Name', type: 'string', validation: (Rule) => Rule.required()}),
+                defineField({name: 'value', title: 'Header Value', type: 'string', validation: (Rule) => Rule.required()}),
+              ],
+              preview: {select: {title: 'key', subtitle: 'value'}},
+            },
+          ],
+        }),
+        defineField({
+          name: 'bodyTemplate',
+          title: 'Body Template (JSON)',
+          type: 'text',
+          description: 'JSON body with {{param}} placeholders. Only used for POST/PUT/PATCH.',
+        }),
+        defineField({
+          name: 'responsePath',
+          title: 'Response Path',
+          type: 'string',
+          description: 'Dot-notation path to extract from the JSON response, e.g. "data.results" or "items[0].text". Leave blank to return the full response.',
+        }),
+        defineField({
+          name: 'responseMaxLength',
+          title: 'Max Response Length',
+          type: 'number',
+          description: 'Truncate the response to this many characters (to avoid token overflows). Default: 4000.',
+          initialValue: 4000,
+        }),
+      ],
+    }),
+
+    // ── Advanced ───────────────────────────────────────────
     defineField({
       name: 'enabled',
       title: 'Enabled',
       type: 'boolean',
+      group: 'advanced',
       description: 'Whether this tool is available for use',
       initialValue: true,
     }),
@@ -128,6 +215,7 @@ export default defineType({
       name: 'category',
       title: 'Category',
       type: 'string',
+      group: 'advanced',
       options: {
         list: [
           {title: 'Data Analysis', value: 'data'},
@@ -135,6 +223,8 @@ export default defineType({
           {title: 'Content', value: 'content'},
           {title: 'Social', value: 'social'},
           {title: 'AI/LLM', value: 'ai'},
+          {title: 'Web', value: 'web'},
+          {title: 'Marketing', value: 'marketing'},
         ],
       },
     }),
@@ -144,11 +234,13 @@ export default defineType({
       title: 'displayName',
       subtitle: 'name',
       enabled: 'enabled',
+      implType: 'implementationType',
     },
-    prepare({title, subtitle, enabled}) {
+    prepare({title, subtitle, enabled, implType}) {
+      const badge = implType === 'http' ? '🌐 ' : '⚙️ '
       return {
-        title: title || subtitle,
-        subtitle: enabled ? subtitle : `${subtitle} (disabled)`,
+        title: badge + (title || subtitle),
+        subtitle: enabled === false ? `${subtitle} (disabled)` : subtitle,
       }
     },
   },

@@ -2,20 +2,29 @@ import {defineType, defineField} from 'sanity'
 
 /**
  * Credential Schema
- * 
+ *
  * Stores API credentials and authentication details.
- * 
+ *
  * SECURITY NOTE: In production, sensitive values should be stored
  * encrypted or reference external secret managers. This schema
  * supports both direct values and external references.
- * 
- * Credential types from source:
+ *
+ * Credential types:
  * - anthropic: { api_key }
- * - google_ads: { developer_token, client_id, client_secret, refresh_token, customer_id }
- * - gsc: { key_file, site_url }
  * - bigquery: { credentials_file, tables }
+ * - brave: { api_key }
+ * - clearbit: { api_key }
+ * - github: { personal_access_token }
+ * - google_ads: { developer_token, client_id, client_secret, refresh_token, customer_id }
+ * - google_api: { api_key } — shared key for PageSpeed, YouTube, etc.
+ * - gsc: { key_file, site_url }
+ * - hunter: { api_key }
  * - openai: { api_key }
  * - reddit: { client_id, client_secret, user_agent }
+ * - sanity: { api_token, project_id, dataset }
+ * - semrush: { api_key }
+ * - serpapi: { api_key }
+ * - slack: { webhook_url }
  */
 export default defineType({
   name: 'credential',
@@ -38,10 +47,19 @@ export default defineType({
         list: [
           {title: 'Anthropic', value: 'anthropic'},
           {title: 'BigQuery', value: 'bigquery'},
+          {title: 'Brave Search', value: 'brave'},
+          {title: 'Clearbit', value: 'clearbit'},
+          {title: 'GitHub', value: 'github'},
           {title: 'Google Ads', value: 'google_ads'},
+          {title: 'Google API Key (PageSpeed / YouTube / etc.)', value: 'google_api'},
           {title: 'Google Search Console', value: 'gsc'},
+          {title: 'Hunter.io', value: 'hunter'},
           {title: 'OpenAI', value: 'openai'},
           {title: 'Reddit', value: 'reddit'},
+          {title: 'Sanity', value: 'sanity'},
+          {title: 'Semrush', value: 'semrush'},
+          {title: 'SerpApi', value: 'serpapi'},
+          {title: 'Slack', value: 'slack'},
         ],
       },
       validation: (Rule) => Rule.required(),
@@ -61,8 +79,8 @@ export default defineType({
       initialValue: 'env',
       validation: (Rule) => Rule.required(),
     }),
-    
-    // Anthropic credentials
+
+    // ── Simple API-key credentials ────────────────────────
     defineField({
       name: 'anthropicApiKey',
       title: 'Anthropic API Key',
@@ -70,8 +88,6 @@ export default defineType({
       description: 'API key or env var name (e.g., "ANTHROPIC_API_KEY")',
       hidden: ({document}) => document?.type !== 'anthropic',
     }),
-    
-    // OpenAI credentials
     defineField({
       name: 'openaiApiKey',
       title: 'OpenAI API Key',
@@ -79,8 +95,91 @@ export default defineType({
       description: 'API key or env var name',
       hidden: ({document}) => document?.type !== 'openai',
     }),
-    
-    // BigQuery credentials
+    defineField({
+      name: 'braveApiKey',
+      title: 'Brave Search API Key',
+      type: 'string',
+      description: 'API key or env var name (e.g., "BRAVE_API_KEY")',
+      hidden: ({document}) => document?.type !== 'brave',
+    }),
+    defineField({
+      name: 'serpApiKey',
+      title: 'SerpApi API Key',
+      type: 'string',
+      description: 'API key or env var name (e.g., "SERPAPI_KEY")',
+      hidden: ({document}) => document?.type !== 'serpapi',
+    }),
+    defineField({
+      name: 'semrushApiKey',
+      title: 'Semrush API Key',
+      type: 'string',
+      description: 'API key or env var name (e.g., "SEMRUSH_API_KEY")',
+      hidden: ({document}) => document?.type !== 'semrush',
+    }),
+    defineField({
+      name: 'googleApiKey',
+      title: 'Google API Key',
+      type: 'string',
+      description: 'Shared API key for Google services (PageSpeed, YouTube, etc.)',
+      hidden: ({document}) => document?.type !== 'google_api',
+    }),
+    defineField({
+      name: 'hunterApiKey',
+      title: 'Hunter.io API Key',
+      type: 'string',
+      description: 'API key or env var name (e.g., "HUNTER_API_KEY")',
+      hidden: ({document}) => document?.type !== 'hunter',
+    }),
+    defineField({
+      name: 'clearbitApiKey',
+      title: 'Clearbit API Key',
+      type: 'string',
+      description: 'API key or env var name (e.g., "CLEARBIT_API_KEY")',
+      hidden: ({document}) => document?.type !== 'clearbit',
+    }),
+
+    // ── GitHub credentials ────────────────────────────────
+    defineField({
+      name: 'githubPersonalAccessToken',
+      title: 'Personal Access Token',
+      type: 'string',
+      description: 'GitHub PAT or env var name (e.g., "GITHUB_PERSONAL_ACCESS_TOKEN")',
+      hidden: ({document}) => document?.type !== 'github',
+    }),
+
+    // ── Sanity credentials ────────────────────────────────
+    defineField({
+      name: 'sanityApiToken',
+      title: 'API Token',
+      type: 'string',
+      description: 'Sanity API token or env var name',
+      hidden: ({document}) => document?.type !== 'sanity',
+    }),
+    defineField({
+      name: 'sanityProjectId',
+      title: 'Project ID',
+      type: 'string',
+      description: 'Sanity project ID',
+      hidden: ({document}) => document?.type !== 'sanity',
+    }),
+    defineField({
+      name: 'sanityDataset',
+      title: 'Dataset',
+      type: 'string',
+      description: 'Sanity dataset name (default: production)',
+      hidden: ({document}) => document?.type !== 'sanity',
+    }),
+
+    // ── Slack credentials ─────────────────────────────────
+    defineField({
+      name: 'slackWebhookUrl',
+      title: 'Webhook URL',
+      type: 'string',
+      description: 'Slack incoming webhook URL or env var name',
+      hidden: ({document}) => document?.type !== 'slack',
+    }),
+
+    // ── BigQuery credentials ──────────────────────────────
     defineField({
       name: 'bigqueryCredentialsFile',
       title: 'Credentials File Path',
@@ -103,8 +202,8 @@ export default defineType({
       ],
       hidden: ({document}) => document?.type !== 'bigquery',
     }),
-    
-    // Google Search Console credentials
+
+    // ── Google Search Console credentials ─────────────────
     defineField({
       name: 'gscKeyFile',
       title: 'Service Account Key File',
@@ -119,8 +218,8 @@ export default defineType({
       description: 'The site URL in GSC (e.g., "https://www.sanity.io/")',
       hidden: ({document}) => document?.type !== 'gsc',
     }),
-    
-    // Google Ads credentials
+
+    // ── Google Ads credentials ────────────────────────────
     defineField({
       name: 'googleAdsDeveloperToken',
       title: 'Developer Token',
@@ -151,8 +250,8 @@ export default defineType({
       type: 'string',
       hidden: ({document}) => document?.type !== 'google_ads',
     }),
-    
-    // Reddit credentials
+
+    // ── Reddit credentials ────────────────────────────────
     defineField({
       name: 'redditClientId',
       title: 'Client ID',
@@ -169,11 +268,11 @@ export default defineType({
       name: 'redditUserAgent',
       title: 'User Agent',
       type: 'string',
-      description: 'e.g., "SanityContentGapBot/1.0"',
+      description: 'e.g., "ContentGapCrewBot/1.0"',
       hidden: ({document}) => document?.type !== 'reddit',
     }),
-    
-    // Metadata
+
+    // ── Metadata ──────────────────────────────────────────
     defineField({
       name: 'environment',
       title: 'Environment',

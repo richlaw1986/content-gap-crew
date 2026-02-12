@@ -44,6 +44,15 @@ def _resolve_mcp_env(env_entries: list[dict[str, Any]] | None) -> dict[str, str]
     _cred_field_map = {
         "openai": "openaiApiKey",
         "anthropic": "anthropicApiKey",
+        "brave": "braveApiKey",
+        "serpapi": "serpApiKey",
+        "semrush": "semrushApiKey",
+        "google_api": "googleApiKey",
+        "hunter": "hunterApiKey",
+        "clearbit": "clearbitApiKey",
+        "github": "githubPersonalAccessToken",
+        "sanity": "sanityApiToken",
+        "slack": "slackWebhookUrl",
     }
 
     for entry in env_entries:

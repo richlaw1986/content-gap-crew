@@ -1,14 +1,21 @@
 """CrewAI crew runner with dynamic assembly and streaming."""
 
 import asyncio
+import json
+import logging
+import re as _re
 from datetime import datetime, timezone
 from typing import Any, AsyncGenerator, Callable
 
+import httpx
 from crewai import Agent, Crew, Process, Task
+from crewai.tools import tool as crewai_tool
 
 from app.config import get_settings
 from app.models import Crew as CrewModel
 from app.tools import TOOL_REGISTRY, CredentialError
+
+logger = logging.getLogger(__name__)
 
 
 class CrewRunner:
@@ -71,47 +78,312 @@ class CrewRunner:
         )
 
     def _build_tool(self, tool_config: dict[str, Any]) -> Any:
-        """Build a tool instance with injected credentials.
-        
+        """Build a tool instance from Sanity config.
+
+        Supports two implementation types:
+          - **builtin**: looks up the Python function in TOOL_REGISTRY.
+          - **http**: dynamically creates a CrewAI tool that calls an
+            external HTTP API based on the ``httpConfig`` stored in Sanity.
+
         Args:
-            tool_config: Tool document from Sanity
-            
+            tool_config: Tool document from Sanity (with ``implementationType``
+                and optional ``httpConfig``).
+
         Returns:
-            Tool function with credentials partially applied if needed
-            
+            A CrewAI-compatible tool function.
+
         Raises:
-            CredentialError: If required credentials are missing
+            CredentialError: If required credentials are missing.
+            ValueError: If a builtin tool name is unknown.
         """
+        impl_type = tool_config.get("implementationType", "builtin")
+
+        if impl_type == "http":
+            return self._build_http_tool(tool_config)
+
+        # ── Builtin (default) ──────────────────────────────────
         tool_name = tool_config.get("name")
         if tool_name not in TOOL_REGISTRY:
-            raise ValueError(f"Unknown tool: {tool_name}")
-        
+            raise ValueError(f"Unknown builtin tool: {tool_name}")
+
         tool_func = TOOL_REGISTRY[tool_name]
         credential_types = tool_config.get("credentialTypes", [])
-        
+
         if not credential_types:
-            # No credentials needed
             return tool_func
-        
-        # Check that we have all required credentials
+
         missing = [t for t in credential_types if t not in self._credentials_by_type]
         if missing:
             raise CredentialError(
                 f"Tool '{tool_name}' requires credentials: {missing}. "
                 f"Available: {list(self._credentials_by_type.keys())}"
             )
-        
-        # For tools that need credentials, we'll need to wrap them
-        # CrewAI tools are called with just the tool arguments, so we need
-        # to inject credentials via a wrapper
-        
-        # Get the primary credential (first one in the list)
+
         primary_cred_type = credential_types[0]
         credential = self._credentials_by_type[primary_cred_type]
-        
-        # Create a wrapper that injects the credential
+
         from functools import partial
         return partial(tool_func, credential=credential)
+
+    # ── HTTP tool builder ──────────────────────────────────────
+
+    @staticmethod
+    def _render_template(template: str, params: dict[str, Any]) -> str:
+        """Replace ``{{key}}`` placeholders with values from *params*."""
+        def _replacer(m: _re.Match) -> str:
+            key = m.group(1).strip()
+            return str(params.get(key, m.group(0)))
+        return _re.sub(r"\{\{(.+?)\}\}", _replacer, template)
+
+    @staticmethod
+    def _extract_path(data: Any, path: str) -> Any:
+        """Walk a dot-notation path (with ``[n]`` indexing) into *data*.
+
+        Example paths: ``"data.results"``, ``"items[0].text"``
+        """
+        if not path:
+            return data
+        for segment in _re.split(r"\.|(?=\[)", path):
+            if not segment:
+                continue
+            idx_match = _re.match(r"\[(\d+)\]", segment)
+            if idx_match:
+                data = data[int(idx_match.group(1))]
+            elif isinstance(data, dict):
+                data = data.get(segment)
+            else:
+                return data
+        return data
+
+    def _build_http_tool(self, tool_config: dict[str, Any]) -> Any:
+        """Create a CrewAI tool from an HTTP API spec stored in Sanity."""
+        tool_name = tool_config.get("name", "http_tool")
+        description = tool_config.get("description", "Call an HTTP API")
+        http_cfg = tool_config.get("httpConfig") or {}
+
+        method = (http_cfg.get("method") or "GET").upper()
+        url_template = http_cfg.get("urlTemplate", "")
+        raw_headers = http_cfg.get("headers") or []
+        body_template = http_cfg.get("bodyTemplate") or ""
+        response_path = http_cfg.get("responsePath") or ""
+        max_len = http_cfg.get("responseMaxLength") or 4000
+
+        # Resolve credential placeholders in headers ({{credential.fieldName}})
+        cred_types = tool_config.get("credentialTypes") or []
+        cred_values: dict[str, Any] = {}
+        for ct in cred_types:
+            cred = self._credentials_by_type.get(ct)
+            if cred:
+                cred_values.update(cred)
+
+        static_headers: dict[str, str] = {}
+        for h in raw_headers:
+            key = h.get("key", "")
+            val = h.get("value", "")
+            # Resolve {{credential.xyz}} patterns
+            val = _re.sub(
+                r"\{\{credential\.(.+?)\}\}",
+                lambda m: str(cred_values.get(m.group(1), m.group(0))),
+                val,
+            )
+            if key:
+                static_headers[key] = val
+
+        # Build parameter docstring from the Sanity `parameters` array
+        params_list = tool_config.get("parameters") or []
+        param_doc_parts = []
+        for p in params_list:
+            pname = p.get("name", "")
+            pdesc = p.get("description", "")
+            preq = "required" if p.get("required") else "optional"
+            param_doc_parts.append(f"  {pname} ({preq}): {pdesc}")
+        params_doc = "\n".join(param_doc_parts) if param_doc_parts else "  (none)"
+
+        # Keep references stable for the closure
+        _render = self._render_template
+        _extract = self._extract_path
+
+        # Discover expected parameter names from the URL + body templates
+        _expected_params: list[str] = _re.findall(r"\{\{(\w+)\}\}", url_template)
+        if body_template:
+            _expected_params.extend(_re.findall(r"\{\{(\w+)\}\}", body_template))
+        _expected_params = list(dict.fromkeys(_expected_params))  # dedupe, preserve order
+
+        # Build the docstring *before* defining the function.
+        # Include the expected parameters so the LLM knows exactly what
+        # JSON object to pass.
+        if _expected_params:
+            param_hint = ", ".join(f'"{p}": "<value>"' for p in _expected_params)
+            _docstring = (
+                f"{description}\n\n"
+                f"Args:\n{params_doc}\n\n"
+                f"Pass input as a JSON string, e.g.: {{{param_hint}}}"
+            )
+        else:
+            _docstring = f"{description}\n\nArgs:\n{params_doc}"
+
+        def _parse_input(raw: str) -> dict[str, Any]:
+            """Parse the single-string input CrewAI passes into named params.
+
+            The LLM is instructed to pass JSON, but may also pass:
+              • ``userId=1``          → key=value pairs
+              • ``1``                 → bare value (mapped to single expected param)
+              • ``{"userId": "1"}``   → JSON object
+            """
+            raw = raw.strip()
+            if not raw:
+                return {}
+
+            # 1. Try JSON object: {"userId": "1"}
+            if raw.startswith("{"):
+                try:
+                    obj = json.loads(raw)
+                    if isinstance(obj, dict):
+                        logger.debug(f"HTTP tool '{tool_name}': parsed JSON input → {obj}")
+                        return obj
+                except json.JSONDecodeError:
+                    pass
+
+            # 2. Try key=value pairs: "userId=1, topic=tech"
+            kv_matches = _re.findall(r"(\w+)\s*=\s*([^\s,]+)", raw)
+            if kv_matches:
+                result = {k: v for k, v in kv_matches}
+                logger.debug(f"HTTP tool '{tool_name}': parsed KV input → {result}")
+                return result
+
+            # 3. Single expected param — map the whole input to it
+            if len(_expected_params) == 1:
+                logger.debug(f"HTTP tool '{tool_name}': mapping input to '{_expected_params[0]}'")
+                return {_expected_params[0]: raw}
+
+            # 4. Couldn't parse — return empty
+            logger.warning(
+                f"HTTP tool '{tool_name}': could not parse input '{raw}' "
+                f"into expected params {_expected_params}"
+            )
+            return {}
+
+        @crewai_tool(tool_name)
+        def http_tool(query: str) -> str:
+            """HTTP tool — docstring is patched below."""
+            params = _parse_input(query)
+            logger.info(f"HTTP tool '{tool_name}' called with raw='{query}', params={params}")
+
+            # Print to stdout so the streaming parser can detect tool usage.
+            # (logger.info goes to Python logging, not the captured stdout)
+            print(f"Using tool: {tool_name}")
+
+            url = _render(url_template, params)
+            headers = {k: _render(v, params) for k, v in static_headers.items()}
+            body = None
+            if body_template and method in ("POST", "PUT", "PATCH"):
+                rendered_body = _render(body_template, params)
+                try:
+                    body = json.loads(rendered_body)
+                except json.JSONDecodeError:
+                    body = rendered_body
+
+            logger.info(f"HTTP tool '{tool_name}' → {method} {url}")
+
+            try:
+                with httpx.Client(timeout=30.0) as client:
+                    resp = client.request(
+                        method, url, headers=headers,
+                        json=body if isinstance(body, (dict, list)) else None,
+                        content=body if isinstance(body, str) else None,
+                    )
+                    resp.raise_for_status()
+
+                    # Parse response
+                    content_type = resp.headers.get("content-type", "")
+                    if "json" in content_type:
+                        data = resp.json()
+                        if response_path:
+                            data = _extract(data, response_path)
+                        result = json.dumps(data, indent=2, ensure_ascii=False)
+                    else:
+                        result = resp.text
+
+                    # Truncate if needed
+                    if len(result) > max_len:
+                        result = result[:max_len] + f"\n\n… (truncated at {max_len} chars)"
+
+                    print(f"Tool Output: {tool_name} returned {len(result)} chars")
+                    return result
+
+            except httpx.HTTPStatusError as e:
+                print(f"Tool Output: {tool_name} HTTP error {e.response.status_code}")
+                return f"HTTP {e.response.status_code}: {e.response.text[:500]}"
+            except Exception as e:
+                return f"Error calling {url}: {e}"
+
+        # Patch the docstring — CrewAI reads it for the tool description
+        http_tool.__doc__ = _docstring
+        return http_tool
+
+    @staticmethod
+    def _compose_backstory(agent_config: dict[str, Any]) -> str:
+        """Compose a backstory from structured personality fields.
+
+        Combines expertise, philosophy, thingsToAvoid, usefulUrls, outputStyle,
+        and any legacy backstory text into a well-formatted backstory string
+        with clear section headings.
+
+        If the agent only has a legacy ``backstory`` field (no structured fields),
+        it is returned as-is (with skill-instruction boilerplate stripped).
+        """
+        sections: list[str] = []
+
+        expertise = (agent_config.get("expertise") or "").strip()
+        if expertise:
+            sections.append(f"## Expertise\n{expertise}")
+
+        philosophy = (agent_config.get("philosophy") or "").strip()
+        if philosophy:
+            sections.append(f"## Philosophy\n{philosophy}")
+
+        avoid_list: list[str] = agent_config.get("thingsToAvoid") or []
+        if avoid_list:
+            bullets = "\n".join(f"- {item}" for item in avoid_list if item)
+            sections.append(f"## Things to Avoid\n{bullets}")
+
+        urls: list[dict[str, str]] = agent_config.get("usefulUrls") or []
+        if urls:
+            links = "\n".join(
+                f"- [{u.get('title', u.get('url', ''))}]({u.get('url', '')})"
+                for u in urls if u.get("url")
+            )
+            if links:
+                sections.append(f"## Reference URLs\n{links}")
+
+        output_style = (agent_config.get("outputStyle") or "").strip()
+        if output_style:
+            sections.append(f"## Output Style\n{output_style}")
+
+        # Legacy / freeform backstory — append if present
+        legacy = (agent_config.get("backstory") or "").strip()
+        if legacy:
+            # Strip stale SKILL_INSTRUCTION boilerplate
+            _skill_patterns = [
+                "Before starting any task, use the search_skills tool to find "
+                "relevant skills. If you are unsure what tools are available, "
+                "call list_available_tools first. If a skill is found, follow "
+                "its steps and explicitly show compliance in your output.",
+                "Before starting any task, use the search_skills tool",
+            ]
+            for pat in _skill_patterns:
+                legacy = legacy.replace(pat, "").strip()
+            legacy = _re.sub(
+                r"(call|use|run)\s+(list_available_tools|search_skills)[^.]*\.",
+                "", legacy, flags=_re.IGNORECASE,
+            ).strip()
+            if legacy:
+                # If there are no structured sections, return legacy as-is
+                if not sections:
+                    return legacy
+                sections.append(f"## Additional Context\n{legacy}")
+
+        return "\n\n".join(sections) if sections else "A helpful AI assistant."
 
     def _build_agent(self, agent_config: dict[str, Any]) -> Agent:
         """Build a CrewAI Agent from Sanity config.
@@ -129,9 +401,9 @@ class CrewRunner:
                 try:
                     tool = self._build_tool(tool_config)
                     tools.append(tool)
-                except (CredentialError, ValueError) as e:
-                    # Log but continue - agent can work with fewer tools
-                    print(f"Warning: Could not build tool {tool_config.get('name')}: {e}")
+                except Exception as e:
+                    # Log but continue — agent can work with fewer tools
+                    logger.warning(f"Could not build tool {tool_config.get('name')}: {e}")
 
         # Attach MCP tools (available to all agents)
         if self._mcp_tools:
@@ -139,18 +411,8 @@ class CrewRunner:
         
         llm_model = agent_config.get("llmModel") or agent_config.get("llmTier")
 
-        # Strip the SKILL_INSTRUCTION boilerplate from backstories — tools
-        # are already provided explicitly via the tools= list.  Leaving it
-        # in causes agents to hallucinate tool calls they can't make.
-        backstory = agent_config.get("backstory", "")
-        _skill_prefix = (
-            "Before starting any task, use the search_skills tool to find "
-            "relevant skills. If you are unsure what tools are available, "
-            "call list_available_tools first. If a skill is found, follow "
-            "its steps and explicitly show compliance in your output."
-        )
-        if backstory.startswith(_skill_prefix):
-            backstory = backstory[len(_skill_prefix):].strip()
+        # Compose backstory from structured fields
+        backstory = self._compose_backstory(agent_config)
 
         return Agent(
             role=agent_config.get("role", ""),
@@ -565,6 +827,18 @@ class CrewRunner:
                 if t.get("name") != "Memory Summary"
             ]
 
+            # Regex patterns for tool call detection in CrewAI stdout
+            tool_use_re = re.compile(
+                r"(?:Using tool|Tool Name|Calling tool)[:\s]+(\S+)", re.IGNORECASE
+            )
+            tool_input_re = re.compile(
+                r"(?:Tool Input|Tool Arguments)[:\s]+(.*)", re.IGNORECASE
+            )
+            tool_output_re = re.compile(
+                r"(?:Tool Output)[:\s]+(.*)", re.IGNORECASE
+            )
+            _last_tool_name: str | None = None
+
             while not kickoff_future.done() or not stream_queue.empty():
                 try:
                     line = await asyncio.wait_for(stream_queue.get(), timeout=0.1)
@@ -573,6 +847,44 @@ class CrewRunner:
 
                 text = ansi_re.sub("", line).strip()
                 if not text:
+                    continue
+
+                # ── Tool call detection ──────────────────────────
+                tool_match = tool_use_re.search(text)
+                if tool_match:
+                    _last_tool_name = tool_match.group(1).strip()
+                    tc_event = {
+                        "event": "agent_message",
+                        "type": "tool_call",
+                        "agent": _display_name(last_agent),
+                        "tool": _last_tool_name,
+                        "content": f"Using tool: {_last_tool_name}",
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                    }
+                    if on_event:
+                        on_event(tc_event)
+                    yield tc_event
+                    continue
+
+                tool_out_match = tool_output_re.search(text)
+                if tool_out_match:
+                    snippet = tool_out_match.group(1).strip()[:200]
+                    tr_event = {
+                        "event": "agent_message",
+                        "type": "tool_result",
+                        "agent": _display_name(last_agent),
+                        "tool": _last_tool_name or "unknown",
+                        "content": snippet,
+                        "timestamp": datetime.now(timezone.utc).isoformat(),
+                    }
+                    if on_event:
+                        on_event(tr_event)
+                    yield tr_event
+                    _last_tool_name = None
+                    continue
+
+                # Skip tool input lines (not useful to show in chat)
+                if tool_input_re.search(text):
                     continue
 
                 if "Agent:" in text:

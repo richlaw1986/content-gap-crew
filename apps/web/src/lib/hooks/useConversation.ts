@@ -211,6 +211,8 @@ export function useConversation(
               break;
             case 'thinking':
             case 'agent_message':
+            case 'tool_call':
+            case 'tool_result':
               setIsRunning(true);
               break;
             case 'system':

@@ -3,7 +3,7 @@
 from datetime import datetime
 from typing import Any, Literal
 
-from pydantic import AliasChoices, BaseModel, Field
+from pydantic import AliasChoices, BaseModel, Field, model_validator
 
 
 class Tool(BaseModel):
@@ -12,11 +12,28 @@ class Tool(BaseModel):
     name: str
     display_name: str | None = Field(alias="displayName", default=None)
     description: str = ""
+    implementation_type: str = Field(alias="implementationType", default="builtin")
     credential_types: list[str] = Field(alias="credentialTypes", default_factory=list)
+    http_config: dict[str, Any] | None = Field(alias="httpConfig", default=None)
+    parameters: list[dict[str, Any]] = Field(default_factory=list)
     enabled: bool = True
 
     class Config:
         populate_by_name = True
+
+    @model_validator(mode="before")
+    @classmethod
+    def _coerce_nulls(cls, data: Any) -> Any:
+        """Sanity returns null for missing/empty fields — coerce to safe defaults."""
+        if isinstance(data, dict):
+            # Null arrays → []
+            for key in ("credentialTypes", "parameters"):
+                if data.get(key) is None:
+                    data[key] = []
+            # Null strings → sensible defaults
+            if data.get("implementationType") is None:
+                data["implementationType"] = "builtin"
+        return data
 
 
 class Agent(BaseModel):
@@ -25,6 +42,13 @@ class Agent(BaseModel):
     name: str
     role: str
     goal: str = ""
+    # Structured personality fields (composed into backstory at runtime)
+    expertise: str = ""
+    philosophy: str = ""
+    things_to_avoid: list[str] = Field(alias="thingsToAvoid", default_factory=list)
+    useful_urls: list[dict[str, str]] = Field(alias="usefulUrls", default_factory=list)
+    output_style: str = Field(alias="outputStyle", default="")
+    # Legacy / freeform override — appended after structured fields
     backstory: str = ""
     tools: list[Tool] = Field(default_factory=list)
     llm_model: str = Field(
@@ -36,6 +60,19 @@ class Agent(BaseModel):
 
     class Config:
         populate_by_name = True
+
+    @model_validator(mode="before")
+    @classmethod
+    def _coerce_agent_nulls(cls, data: Any) -> Any:
+        """Sanity returns null for missing/empty fields — coerce to safe defaults."""
+        if isinstance(data, dict):
+            for key in ("thingsToAvoid", "usefulUrls"):
+                if data.get(key) is None:
+                    data[key] = []
+            for key in ("expertise", "philosophy", "outputStyle", "backstory"):
+                if data.get(key) is None:
+                    data[key] = ""
+        return data
 
 
 class Task(BaseModel):

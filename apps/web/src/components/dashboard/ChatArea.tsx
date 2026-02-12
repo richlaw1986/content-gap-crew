@@ -168,7 +168,6 @@ export function ChatArea({
 
   const shouldShow = (msg: ConversationMessage) => {
     if (msg.type === 'status') return false;
-    if (msg.type === 'tool_call' || msg.type === 'tool_result') return false;
     return true;
   };
 
@@ -219,6 +218,27 @@ export function ChatArea({
                 <span className="w-1.5 h-1.5 rounded-full bg-sky-400 animate-pulse" />
                 <span className={`font-medium ${getAgentColor(msg.sender)}`}>{msg.sender}</span>
                 <span className="opacity-60">{msg.content}</span>
+              </div>
+            );
+          }
+
+          // ── Tool call / result events ──
+          if (msg.type === 'tool_call') {
+            return (
+              <div key={msg.id} className="flex items-center gap-2 py-1 text-xs text-muted-foreground">
+                <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
+                <span className={`font-medium ${getAgentColor(msg.sender)}`}>{msg.sender}</span>
+                <span className="opacity-60">called</span>
+                <span className="font-mono text-amber-600 dark:text-amber-400">{msg.tool || 'tool'}</span>
+              </div>
+            );
+          }
+          if (msg.type === 'tool_result') {
+            return (
+              <div key={msg.id} className="flex items-center gap-2 py-1 text-xs text-muted-foreground">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                <span className={`font-medium ${getAgentColor(msg.sender)}`}>{msg.sender}</span>
+                <span className="opacity-60">← {msg.tool || 'tool'}: {msg.content}</span>
               </div>
             );
           }

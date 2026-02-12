@@ -232,6 +232,10 @@ async def get_conversation(conversation_id: str, request: Request) -> dict[str, 
 
 # ── WebSocket endpoint ─────────────────────────────────────────
 
+# Event types that are live-only (streamed via WS but not persisted / replayed).
+# "system" covers the "Crew assembled: ..." event from crew_runner.
+_ephemeral_ws_types = {"thinking", "tool_call", "tool_result", "status", "system"}
+
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -260,6 +264,8 @@ async def conversation_ws(websocket: WebSocket, conversation_id: str):
         return
 
     # ── Replay existing messages so the client sees full history ────
+    # Skip ephemeral status messages (thinking, tool_call, tool_result)
+    # — they were live events, not conversation content worth replaying.
     existing_messages = conv.get("messages") or []
     for m in existing_messages:
         content = m.get("content", "")
@@ -267,6 +273,8 @@ async def conversation_ws(websocket: WebSocket, conversation_id: str):
             continue
         sender = m.get("sender", "system")
         msg_type = m.get("type", "message")
+        if msg_type in _ephemeral_ws_types:
+            continue
 
         # Map Sanity storage types to the WS protocol types the frontend expects
         if msg_type == "message" and sender == "user":
@@ -389,6 +397,22 @@ async def conversation_ws(websocket: WebSocket, conversation_id: str):
 
     async def _run_crew(objective: str, user_inputs: dict[str, Any]):
         """Plan and execute a crew run inside the conversation."""
+        try:
+            await _run_crew_inner(objective, user_inputs)
+        except Exception as fatal:
+            logger.error(f"Crew run failed: {fatal}", exc_info=True)
+            try:
+                await send({
+                    "type": "error",
+                    "message": f"Something went wrong: {fatal}",
+                    "timestamp": _now(),
+                })
+                await sanity.update_conversation_status(conversation_id, "active")
+            except Exception:
+                pass  # websocket may already be closed
+
+    async def _run_crew_inner(objective: str, user_inputs: dict[str, Any]):
+        """Inner implementation — errors bubble up to _run_crew wrapper."""
         nonlocal pending_questions
 
         planner = await sanity.get_planner()
@@ -489,7 +513,26 @@ async def conversation_ws(websocket: WebSocket, conversation_id: str):
             if r:
                 resolved_ids.add(r)
 
-        planned_agents = [Agent(**a) for a in agents if a.get("_id") in resolved_ids]
+        try:
+            planned_agents = [Agent(**a) for a in agents if a.get("_id") in resolved_ids]
+        except Exception as agent_err:
+            logger.warning(f"Agent validation failed, attempting to sanitize: {agent_err}")
+            # Retry with sanitized data — coerce None lists to []
+            sanitized = []
+            for a in agents:
+                if a.get("_id") not in resolved_ids:
+                    continue
+                for tool in (a.get("tools") or []):
+                    if tool.get("credentialTypes") is None:
+                        tool["credentialTypes"] = []
+                    if tool.get("parameters") is None:
+                        tool["parameters"] = []
+                try:
+                    sanitized.append(Agent(**a))
+                except Exception as inner_err:
+                    logger.error(f"Skipping agent {a.get('_id')}: {inner_err}")
+            planned_agents = sanitized
+
         if not planned_agents:
             planned_agents = [Agent(**a) for a in agents]
             resolved_ids = {a.get("_id") for a in agents}
@@ -505,7 +548,10 @@ async def conversation_ws(websocket: WebSocket, conversation_id: str):
             if all(a.id != memory_agent_id for a in planned_agents):
                 mem_data = next((a for a in all_agents if a.get("_id") == memory_agent_id), None)
                 if mem_data:
-                    planned_agents.append(Agent(**mem_data))
+                    try:
+                        planned_agents.append(Agent(**mem_data))
+                    except Exception as mem_err:
+                        logger.warning(f"Could not add memory agent: {mem_err}")
 
         fallback_id = planned_agents[0].id if planned_agents else None
         planned_tasks: list[Task] = []
@@ -598,23 +644,38 @@ async def conversation_ws(websocket: WebSocket, conversation_id: str):
                         continue
 
                     msg_type = event.get("type", "message")
-                    ws_type = "thinking" if msg_type == "thinking" else "agent_message"
+                    # Preserve tool_call/tool_result types; map thinking; default to agent_message
+                    if msg_type in ("tool_call", "tool_result"):
+                        ws_type = msg_type
+                    elif msg_type == "thinking":
+                        ws_type = "thinking"
+                    else:
+                        ws_type = "agent_message"
+
                     out = {
                         "type": ws_type,
                         "sender": agent_label or "Agent",
                         "content": event.get("content", ""),
                         "timestamp": event.get("timestamp", _now()),
                     }
+                    # Include tool name for tool events
+                    if event.get("tool"):
+                        out["tool"] = event["tool"]
+
                     await send(out)
-                    # Persist to conversation
-                    await sanity.append_message(conversation_id, {
-                        "_key": _msg_key(),
-                        "sender": agent_label or "Agent",
-                        "type": ws_type,
-                        "content": event.get("content", ""),
-                        "metadata": {"runId": run_id},
-                        "timestamp": event.get("timestamp", _now()),
-                    })
+                    # Only persist substantive messages — skip ephemeral
+                    # live-only events (thinking, tool_call, tool_result,
+                    # system "crew assembled" etc.) which would clutter
+                    # history and cause replay duplicates.
+                    if ws_type not in _ephemeral_ws_types and msg_type not in _ephemeral_ws_types:
+                        await sanity.append_message(conversation_id, {
+                            "_key": _msg_key(),
+                            "sender": agent_label or "Agent",
+                            "type": ws_type,
+                            "content": event.get("content", ""),
+                            "metadata": {"runId": run_id, **({"tool": event["tool"]} if event.get("tool") else {})},
+                            "timestamp": event.get("timestamp", _now()),
+                        })
 
                 elif evt_type == "complete":
                     output = event.get("finalOutput", "")

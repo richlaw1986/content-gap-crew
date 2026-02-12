@@ -43,11 +43,8 @@ export default defineType({
       name: 'name',
       title: 'Name',
       type: 'string',
-      description: 'Unique identifier for the agent (e.g., "data_analyst")',
-      validation: (Rule) => Rule.required().regex(/^[a-z][a-z0-9_]*$/, {
-        name: 'snake_case',
-        invert: false,
-      }).error('Name must be snake_case (lowercase letters, numbers, underscores)'),
+      description: 'Display name for the agent (e.g., "Data Analyst")',
+      validation: (Rule) => Rule.required(),
     }),
     defineField({
       name: 'role',
@@ -64,11 +61,57 @@ export default defineType({
       validation: (Rule) => Rule.required(),
     }),
     defineField({
-      name: 'backstory',
-      title: 'Backstory',
+      name: 'expertise',
+      title: 'Expertise',
       type: 'text',
-      description: 'Context and expertise that shapes how the agent approaches tasks',
-      validation: (Rule) => Rule.required(),
+      rows: 3,
+      description: 'Core knowledge domains and skills (e.g., "Deep expertise in SEO metrics, LLM traffic patterns, and statistical modelling")',
+    }),
+    defineField({
+      name: 'philosophy',
+      title: 'Philosophy',
+      type: 'text',
+      rows: 3,
+      description: 'How this agent approaches work — values, principles, way of thinking',
+    }),
+    defineField({
+      name: 'thingsToAvoid',
+      title: 'Things to Avoid',
+      type: 'array',
+      of: [{type: 'string'}],
+      description: 'Anti-patterns and mistakes this agent should steer clear of',
+    }),
+    defineField({
+      name: 'usefulUrls',
+      title: 'Useful URLs',
+      type: 'array',
+      of: [
+        {
+          type: 'object',
+          fields: [
+            defineField({name: 'title', title: 'Title', type: 'string', validation: (Rule) => Rule.required()}),
+            defineField({name: 'url', title: 'URL', type: 'url', validation: (Rule) => Rule.required()}),
+          ],
+          preview: {
+            select: {title: 'title', subtitle: 'url'},
+          },
+        },
+      ],
+      description: 'Reference URLs that complement this agent\'s knowledge',
+    }),
+    defineField({
+      name: 'outputStyle',
+      title: 'Output Style',
+      type: 'text',
+      rows: 2,
+      description: 'Tone, format preferences, and length guidance (e.g., "Use tables for comparisons. Be concise. Cite data sources.")',
+    }),
+    defineField({
+      name: 'backstory',
+      title: 'Backstory (legacy / override)',
+      type: 'text',
+      rows: 4,
+      description: 'Optional freeform backstory. If provided, it is appended after the structured fields above. For new agents, prefer filling in the structured fields instead.',
     }),
     defineField({
       name: 'tools',

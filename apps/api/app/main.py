@@ -16,23 +16,23 @@ from app.services.sanity import get_sanity_client
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Application lifespan handler."""
     settings = get_settings()
-
+    
     setup_logging(
         level="DEBUG" if settings.debug else "INFO",
-        json_format=not settings.debug,
+        json_format=not settings.debug
     )
     logger = get_logger(__name__)
-
+    
     app.state.sanity = get_sanity_client()
     app.state.planned_runs = {}  # kept for SSE backward compat
-
+    
     logger.info(
-        "Starting Content Gap Crew API",
-        extra={"debug": settings.debug, "sanity_configured": app.state.sanity.configured},
+        f"Starting Content Gap Crew API",
+        extra={"debug": settings.debug, "sanity_configured": app.state.sanity.configured}
     )
-
+    
     yield
-
+    
     logger.info("Shutting down Content Gap Crew API")
     await app.state.sanity.close()
 

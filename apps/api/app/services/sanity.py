@@ -120,20 +120,35 @@ class SanityClient:
             name,
             role,
             goal,
+            expertise,
+            philosophy,
+            thingsToAvoid,
+            usefulUrls,
+            outputStyle,
             backstory,
             llmModel,
             tools[]->{
                 _id,
                 name,
+                displayName,
                 description,
-                credentialTypes
+                implementationType,
+                credentialTypes,
+                parameters,
+                httpConfig
             }
         }"""
         return await self._query(query) or []
 
     async def get_agent(self, agent_id: str) -> Agent | None:
         query = """*[_type == "agent" && _id == $id][0] {
-            _id, name, role, goal, backstory, llmModel, tools[]->
+            _id, name, role, goal,
+            expertise, philosophy, thingsToAvoid, usefulUrls, outputStyle,
+            backstory, llmModel,
+            tools[]->{
+                _id, name, displayName, description,
+                implementationType, credentialTypes, parameters, httpConfig
+            }
         }"""
         result = await self._query(query, {"id": agent_id})
         return Agent(**result) if result else None
@@ -141,7 +156,15 @@ class SanityClient:
     async def get_crew(self, crew_id: str) -> Crew | None:
         query = """*[_type == "crew" && _id == $id][0] {
             _id, name, displayName, slug, description, inputSchema,
-            agents[]->{ _id, name, role, goal, backstory, llmModel, tools[]-> }
+            agents[]->{
+                _id, name, role, goal,
+                expertise, philosophy, thingsToAvoid, usefulUrls, outputStyle,
+                backstory, llmModel,
+                tools[]->{
+                    _id, name, displayName, description,
+                    implementationType, credentialTypes, parameters, httpConfig
+                }
+            }
         }"""
         result = await self._query(query, {"id": crew_id})
         return Crew(**result) if result else None
@@ -155,7 +178,11 @@ class SanityClient:
     async def get_memory_policy(self) -> dict[str, Any] | None:
         query = """*[_type == "memoryPolicy" && enabled == true][0] {
             _id, name,
-            agent->{ _id, name, role, backstory, llmModel }
+            agent->{
+                _id, name, role, goal,
+                expertise, philosophy, thingsToAvoid, usefulUrls, outputStyle,
+                backstory, llmModel
+            }
         }"""
         return await self._query(query)
 
@@ -179,12 +206,23 @@ class SanityClient:
         """Fetch all credential documents (with all fields, for tool injection)."""
         query = """*[_type == "credential"] {
             _id, name, type, storageMethod, environment,
-            anthropicApiKey,
-            openaiApiKey,
+            // Simple API-key credentials
+            anthropicApiKey, openaiApiKey, braveApiKey, serpApiKey,
+            semrushApiKey, googleApiKey, hunterApiKey, clearbitApiKey,
+            // GitHub
+            githubPersonalAccessToken,
+            // Sanity
+            sanityApiToken, sanityProjectId, sanityDataset,
+            // Slack
+            slackWebhookUrl,
+            // BigQuery
             bigqueryCredentialsFile, bigqueryTables,
+            // GSC
             gscKeyFile, gscSiteUrl,
+            // Google Ads
             googleAdsDeveloperToken, googleAdsClientId, googleAdsClientSecret,
             googleAdsRefreshToken, googleAdsCustomerId,
+            // Reddit
             redditClientId, redditClientSecret, redditUserAgent
         }"""
         return await self._query(query) or []
@@ -193,7 +231,17 @@ class SanityClient:
         query = """*[_type == "mcpServer" && enabled == true] {
             _id, name, displayName, description, transport,
             command, args, url,
-            env[]{ key, value, "fromCredential": fromCredential->{ _id, type, storageMethod, openaiApiKey, anthropicApiKey } },
+            env[]{
+              key, value,
+              "fromCredential": fromCredential->{
+                _id, type, storageMethod,
+                openaiApiKey, anthropicApiKey, braveApiKey, serpApiKey,
+                semrushApiKey, googleApiKey, hunterApiKey, clearbitApiKey,
+                githubPersonalAccessToken,
+                sanityApiToken, sanityProjectId, sanityDataset,
+                slackWebhookUrl
+              }
+            },
             tools, timeout
         }"""
         return await self._query(query) or []
@@ -422,11 +470,11 @@ class StubSanityClient:
 
     async def list_agents_full(self) -> list[dict[str, Any]]:
         return [
-            {"_id": "agent-data-analyst", "name": "Data Analyst", "role": "Senior Data Analyst", "goal": "Analyze data, find patterns, and produce quantitative insights", "backstory": "Expert in data analysis with deep knowledge of SEO metrics, LLM traffic patterns, statistical modelling, and quantitative research. Also serves as a general-purpose analyst for any data-heavy or technical task.", "llmModel": "gpt-5.2", "tools": []},
-            {"_id": "agent-product-marketer", "name": "Product Marketer", "role": "Senior Product Marketing Manager", "goal": "Identify content gaps and competitive positioning opportunities", "backstory": "Experienced product marketer who understands how to position technical products. Expert at competitive analysis, messaging, and go-to-market strategy.", "llmModel": "gpt-5.2", "tools": []},
-            {"_id": "agent-seo-specialist", "name": "SEO Specialist", "role": "Technical SEO Specialist", "goal": "Optimize content strategy for search visibility and AEO", "backstory": "SEO expert focused on technical optimization and emerging AI search patterns. Understands both traditional SEO and LLM optimization (AEO).", "llmModel": "gpt-5.2", "tools": []},
-            {"_id": "agent-work-reviewer", "name": "Work Reviewer", "role": "Quality Assurance Reviewer", "goal": "Review and validate analysis quality, ensure actionable recommendations", "backstory": "Meticulous reviewer who ensures all analysis is accurate, well-supported, and actionable.", "llmModel": "gpt-5.2", "tools": []},
-            {"_id": "agent-narrative-governor", "name": "Narrative Governor", "role": "Content Strategy Director", "goal": "Synthesize findings into coherent content strategy", "backstory": "Senior content strategist who excels at turning data into narrative.", "llmModel": "gpt-5.2", "tools": []},
+            {"_id": "agent-data-analyst", "name": "Data Analyst", "role": "Senior Data Analyst", "goal": "Analyze data, find patterns, and produce quantitative insights", "expertise": "Deep expertise in data analysis, SEO metrics, LLM traffic patterns, statistical modelling, and quantitative research.", "philosophy": "Data-driven and evidence-first. Every claim should be backed by a number.", "thingsToAvoid": ["Making claims without supporting data", "Over-complicating analysis"], "outputStyle": "Use tables and charts where possible. Lead with the headline insight.", "llmModel": "gpt-5.2", "tools": []},
+            {"_id": "agent-product-marketer", "name": "Product Marketer", "role": "Senior Product Marketing Manager", "goal": "Identify content gaps and competitive positioning opportunities", "expertise": "Experienced product marketer with deep understanding of technical product positioning and competitive analysis.", "philosophy": "Buyer-centric. Every piece of content should answer 'why should the reader care?'", "thingsToAvoid": ["Generic messaging", "Feature-listing without buyer outcomes"], "outputStyle": "Clear, punchy prose. Comparison tables for competitors.", "llmModel": "gpt-5.2", "tools": []},
+            {"_id": "agent-seo-specialist", "name": "SEO Specialist", "role": "Technical SEO Specialist", "goal": "Optimize content strategy for search visibility and AEO", "expertise": "SEO expert focused on technical optimisation and emerging AI search patterns.", "philosophy": "Start from what the searcher needs, then work backwards to implementation.", "thingsToAvoid": ["Keyword-stuffing", "Ignoring search intent"], "outputStyle": "Technical but accessible. Prioritised action items.", "llmModel": "gpt-5.2", "tools": []},
+            {"_id": "agent-work-reviewer", "name": "Work Reviewer", "role": "Quality Assurance Reviewer", "goal": "Review and validate analysis quality, ensure actionable recommendations", "expertise": "Meticulous reviewer skilled at spotting logical gaps and unsupported claims.", "philosophy": "Every deliverable should be stakeholder-ready. Critique should include a fix.", "thingsToAvoid": ["Rubber-stamping", "Feedback without suggestions"], "outputStyle": "Structured review: overall assessment, then Issue → Suggestion.", "llmModel": "gpt-5.2", "tools": []},
+            {"_id": "agent-narrative-governor", "name": "Narrative Governor", "role": "Content Strategy Director", "goal": "Synthesize findings into coherent content strategy", "expertise": "Memory management and information compression.", "philosophy": "Distil, don't embellish. Facts only.", "thingsToAvoid": ["Adding analysis", "Attempting tool calls"], "outputStyle": "Ultra-concise bullet points.", "llmModel": "gpt-5.2", "tools": []},
         ]
 
     async def get_agent(self, agent_id: str) -> Agent | None:
@@ -453,8 +501,8 @@ class StubSanityClient:
                 "SIMPLE question → EXACTLY 1 agent, 1 task. ≤300 words. questions: [].\n"
                 "MODERATE/COMPLEX → Use REVIEW LOOP: Task 1 (primary drafts), Task 2 (reviewer gives feedback), "
                 "Task 3 (primary revises). 2+ agents, 3+ tasks. Process must be 'sequential'.\n\n"
-                "RULE 2 — AGENT SELECTION: match by role/backstory. Technical questions → Technical SEO Specialist. "
-                "NEVER include Narrative Governor. For reviewer role, prefer Quality Assurance Reviewer.\n\n"
+                "RULE 2 — AGENT SELECTION: match by role/expertise/philosophy. Technical questions → Technical SEO Specialist. "
+                "NEVER include Narrative Governor. MODERATE/COMPLEX plans MUST include Quality Assurance Reviewer (agent-work-reviewer) — non-negotiable.\n\n"
                 "RULE 3 — RESPONSE QUALITY: Include 'Keep your answer concise.' and 'Do not ask follow-up questions.' in task descriptions.\n\n"
                 "Return JSON: {agents, tasks [{name, description, expectedOutput, agentId, order}], process: 'sequential', inputSchema: [], questions: []}."
             ),
@@ -464,7 +512,7 @@ class StubSanityClient:
     async def get_memory_policy(self) -> dict[str, Any] | None:
         return {
             "_id": "memory-policy-default", "name": "Default Memory Policy",
-            "agent": {"_id": "agent-narrative-governor", "name": "Narrative Governor", "role": "Content Strategy Director", "backstory": "Summarize prior outputs and remove non-salient details."},
+            "agent": {"_id": "agent-narrative-governor", "name": "Narrative Governor", "role": "Content Strategy Director", "expertise": "Memory management and information compression.", "philosophy": "Distil, don't embellish.", "llmModel": "gpt-5.2"},
         }
 
     async def search_skills(self, query: str | None = None, tags: list[str] | None = None, limit: int = 10) -> list[dict[str, Any]]:
