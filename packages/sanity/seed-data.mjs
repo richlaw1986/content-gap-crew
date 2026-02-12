@@ -13,8 +13,8 @@ const tools = [
   {
     _id: 'tool-sitemap-lookup',
     _type: 'tool',
-    name: 'sanity_sitemap_lookup',
-    description: 'Search Sanity.io sitemap for existing content on a topic',
+    name: 'sitemap_lookup',
+    description: 'Search any website sitemap for existing content on a topic. Takes a site URL and a query.',
     credentialTypes: [],
     enabled: true,
     category: 'content',
@@ -22,8 +22,8 @@ const tools = [
   {
     _id: 'tool-content-audit',
     _type: 'tool',
-    name: 'sanity_content_audit',
-    description: 'Audit content freshness and coverage by area',
+    name: 'content_audit',
+    description: 'Audit content freshness and coverage on any website by scanning its sitemap. Takes a site URL and optional query filter.',
     credentialTypes: [],
     enabled: true,
     category: 'content',
@@ -311,7 +311,7 @@ const skills = [
       'Summarize findings and recommendations',
     ],
     tags: ['seo', 'eeat', 'content-quality', 'trust'],
-    toolsRequired: ['fetch_webpage_content', 'sanity_sitemap_lookup'],
+    toolsRequired: ['fetch_webpage_content', 'sitemap_lookup'],
     inputSchema: [
       {name: 'url', label: 'URL', type: 'string', required: true, placeholder: 'https://example.com'},
     ],
@@ -331,7 +331,7 @@ const skills = [
       'Recommend new content',
     ],
     tags: ['competitive', 'content-gap', 'seo'],
-    toolsRequired: ['fetch_webpage_content', 'sanity_sitemap_lookup'],
+    toolsRequired: ['fetch_webpage_content', 'sitemap_lookup'],
     inputSchema: [
       {name: 'topic', label: 'Topic', type: 'string', required: true},
       {name: 'competitors', label: 'Competitors', type: 'array', required: false},

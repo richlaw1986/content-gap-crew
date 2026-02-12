@@ -230,16 +230,16 @@ KEY COMPETITOR DOMAINS TO CHECK:
 7. Builder.io - No-code competitor
 
 CONTENT FORMAT ANALYSIS CHECKLIST:
-□ Does Sanity have a page specifically for "{query}"?
+□ Does your site have a page specifically for "{query}"?
 □ What format do top results use? (guide, comparison, tutorial, list)
 □ Is there a featured snippet? What type?
 □ Are there "People also ask" questions?
 □ What schema markup do competitors use?
 
 COMPETITOR CONTENT GAP INDICATORS:
-- If competitors have dedicated pages and Sanity doesn't = HIGH PRIORITY GAP
+- If competitors have dedicated pages and you don't = HIGH PRIORITY GAP
 - If no one has good content = OPPORTUNITY TO OWN THE TOPIC
-- If Sanity has old/thin content vs comprehensive competitor content = UPDATE NEEDED
+- If your content is old/thin vs comprehensive competitor content = UPDATE NEEDED
 
 AEO SIGNALS TO CHECK:
 - Do AI assistants cite any sources for this query?
@@ -317,75 +317,94 @@ FRESHNESS REQUIREMENTS (Critical for AEO):
 ENTITY GROUNDING:
 - Mention specific tools, companies, standards by name
 - Link to authoritative sources
-- Be explicit about Sanity.io's approach to {query}
+- Be explicit about the product/brand's approach to {query}
 """
 
 
 @tool
-async def competitor_content_gaps(topic: str) -> str:
+async def competitor_content_gaps(site_url: str, topic: str, competitor_urls: str = "") -> str:
     """
-    Analyze competitor content for a topic and identify gaps where Sanity.io
+    Analyze competitor content for a topic and identify gaps where your site
     is missing content that competitors have.
 
-    Checks key competitor sites for content on the topic and compares to Sanity.io.
+    Scans your site's sitemap, then checks competitor sitemaps for the same
+    topic so you can see where you're behind.
     
     Args:
+        site_url: Your website URL (e.g. "https://www.sanity.io")
         topic: Topic to analyze for competitor gaps
+        competitor_urls: Comma-separated competitor site URLs.
+                         If empty, defaults to common CMS competitors.
         
     Returns:
-        Gap analysis with competitor presence and recommendations
+        Gap analysis with your site vs competitor coverage
     """
-    # Import here to avoid circular imports
-    from app.tools.sitemap import sanity_sitemap_lookup
+    from app.tools.sitemap import sitemap_lookup
     
-    # First check Sanity's coverage
-    sanity_check = await sanity_sitemap_lookup(topic)
+    # Check your site's coverage
+    your_check = await sitemap_lookup(site_url, topic)
     
-    competitors = {
-        "Contentful": f"https://www.contentful.com/api/search/?pageSize=50&query={topic.replace(' ', '+')}",
-        "Strapi": f"https://strapi.io/search?q={topic.replace(' ', '+')}",
-        "Prismic": f"https://prismic.io/search?q={topic.replace(' ', '+')}",
-        "Storyblok": f"https://www.storyblok.com/search?q={topic.replace(' ', '+')}",
-    }
+    # Parse competitor URLs or use defaults
+    if competitor_urls.strip():
+        comp_list = [u.strip() for u in competitor_urls.split(",") if u.strip()]
+    else:
+        comp_list = [
+            "https://www.contentful.com",
+            "https://strapi.io",
+            "https://prismic.io",
+            "https://www.storyblok.com",
+        ]
     
     topic_slug = topic.lower().replace(" ", "-")
+    from urllib.parse import urlparse
+    site_name = urlparse(site_url).netloc
     
     result = f"""
 COMPETITOR CONTENT GAP ANALYSIS
 ===============================
 Topic: "{topic}"
+Your Site: {site_url}
 
-SANITY.IO COVERAGE:
+YOUR SITE COVERAGE:
 {'-' * 40}
-{sanity_check}
+{your_check}
 
-COMPETITOR PRESENCE (Manual verification needed):
+COMPETITOR SITEMAPS (checking for same topic):
 {'-' * 40}
 """
     
-    for name, url in competitors.items():
-        result += f"\n{name}:\n"
-        result += f"  Search URL: {url}\n"
-        result += f"  Likely content URLs to check:\n"
-        result += f"    - https://www.{name.lower()}.com/blog/{topic_slug}\n"
-        result += f"    - https://www.{name.lower()}.com/docs/{topic_slug}\n"
-        result += f"    - https://www.{name.lower()}.com/guides/{topic_slug}\n"
+    for comp_url in comp_list:
+        comp_name = urlparse(comp_url).netloc
+        try:
+            comp_check = await sitemap_lookup(comp_url, topic)
+            # Extract just the match counts from the result
+            result += f"\n{comp_name}:\n"
+            for line in comp_check.split("\n"):
+                line_stripped = line.strip()
+                if "EXACT MATCHES" in line_stripped or "STRONG MATCHES" in line_stripped:
+                    result += f"  {line_stripped}\n"
+                elif line_stripped.startswith("✓") or line_stripped.startswith("~"):
+                    result += f"    {line_stripped}\n"
+                elif "CONTENT GAP" in line_stripped or "COVERAGE" in line_stripped:
+                    result += f"  {line_stripped}\n"
+        except Exception:
+            result += f"\n{comp_name}: Could not fetch sitemap\n"
     
     result += f"""
 
 GAP ANALYSIS CHECKLIST:
 {'-' * 40}
-□ Does Sanity have a dedicated page for "{topic}"?
-□ Is Sanity's content as comprehensive as competitors?
-□ Is Sanity's content more recently updated?
-□ Does Sanity's content rank better in search?
-□ Do AI assistants cite Sanity for this topic?
+□ Does {site_name} have a dedicated page for "{topic}"?
+□ Is your content as comprehensive as competitors?
+□ Is your content more recently updated?
+□ Does your content rank better in search?
+□ Do AI assistants cite your site for this topic?
 
 RECOMMENDED ACTIONS:
-1. If no Sanity content exists: Create new content (HIGH PRIORITY)
+1. If no content exists: Create new content (HIGH PRIORITY)
 2. If thin content exists: Expand and update
 3. If competitors have better content: Analyze and improve
-4. If Sanity is better: Optimize for AEO and discoverability
+4. If you're ahead: Optimize for AEO and discoverability
 """
     
     return result

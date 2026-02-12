@@ -259,6 +259,34 @@ async def conversation_ws(websocket: WebSocket, conversation_id: str):
         await websocket.close(code=4004)
         return
 
+    # ── Replay existing messages so the client sees full history ────
+    existing_messages = conv.get("messages") or []
+    for m in existing_messages:
+        content = m.get("content", "")
+        if not content:
+            continue
+        sender = m.get("sender", "system")
+        msg_type = m.get("type", "message")
+
+        # Map Sanity storage types to the WS protocol types the frontend expects
+        if msg_type == "message" and sender == "user":
+            ws_type = "user_message"
+        elif msg_type == "message":
+            ws_type = "agent_message"
+        else:
+            ws_type = msg_type
+
+        try:
+            await websocket.send_json({
+                "type": ws_type,
+                "sender": sender,
+                "content": content,
+                "timestamp": m.get("timestamp", _now()),
+                "replayed": True,
+            })
+        except Exception:
+            break  # client disconnected during replay
+
     # Per-connection state
     pending_questions: dict[str, asyncio.Future] = {}  # questionId → Future[str]
     run_task: asyncio.Task | None = None

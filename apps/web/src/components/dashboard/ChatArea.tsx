@@ -148,7 +148,7 @@ export function ChatArea({
                 ? 'Type your answer…'
                 : isRunning
                   ? 'Type to add context or queue a follow-up…'
-                  : 'Describe your goal and press Send…'
+                  : 'Ask anything…'
             }
             className="flex-1 px-4 py-3 border border-border rounded-lg bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-ring focus:border-transparent"
           />
@@ -160,12 +160,6 @@ export function ChatArea({
             {awaitingInput ? 'Answer' : 'Send'}
           </Button>
         </form>
-        {isConnected && (
-          <div className="mt-2 flex items-center gap-1.5">
-            <span className="w-1.5 h-1.5 rounded-full bg-green-500" />
-            <span className="text-[10px] text-muted-foreground">Connected</span>
-          </div>
-        )}
       </div>
     </div>
   );

@@ -1,42 +1,18 @@
-"""Sanity.io sitemap lookup and content audit tools."""
+"""Sitemap lookup and content audit tools — works with any website."""
 
 import re
 import xml.etree.ElementTree as ET
 from datetime import datetime
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 
 from crewai.tools import tool
 
 
-# Sitemap URLs to check
-SANITY_SITEMAP_URLS = [
-    "https://www.sanity.io/sitemap.xml",
-    "https://www.sanity.io/community-sitemap.xml",
-    "https://www.sanity.io/main-sitemap.xml",
-    "https://www.sanity.io/ui-sitemap.xml",
-    "https://www.sanity.io/docs/sitemap.xml",
-    "https://www.sanity.io/customerstories-sitemap.xml",
-    "https://www.sanity.io/resources-sitemap.xml",
-    "https://www.sanity.io/blog-sitemap.xml",
-    "https://www.sanity.io/guides-sitemap.xml",
-    "https://www.sanity.io/templates-sitemap.xml",
-    "https://www.sanity.io/plugins-sitemap.xml",
-    "https://www.sanity.io/exchange-sitemap.xml",
-]
-
 # XML namespace for sitemaps
 SITEMAP_NS = {"sm": "http://www.sitemaps.org/schemas/sitemap/0.9"}
-
-# Synonyms for common terms
-SYNONYMS = {
-    "content modeling": ["content-modeling", "content model", "schema", "document types", "content types"],
-    "headless cms": ["headless-cms", "api-first", "decoupled"],
-    "ai": ["artificial intelligence", "machine learning", "ml", "llm", "gpt", "generative"],
-    "structured content": ["structured-content", "content structure"],
-    "localization": ["localisation", "i18n", "internationalization", "translation"],
-}
 
 
 async def fetch_sitemap_urls(client: httpx.AsyncClient, sitemap_url: str) -> list[dict[str, Any]]:
@@ -47,7 +23,7 @@ async def fetch_sitemap_urls(client: httpx.AsyncClient, sitemap_url: str) -> lis
     urls = []
     
     try:
-        response = await client.get(sitemap_url, timeout=30.0)
+        response = await client.get(sitemap_url, timeout=30.0, follow_redirects=True)
         if response.status_code != 200:
             return urls
             
@@ -56,12 +32,12 @@ async def fetch_sitemap_urls(client: httpx.AsyncClient, sitemap_url: str) -> lis
         # Check if this is a sitemap index (contains links to other sitemaps)
         sitemap_locs = root.findall(".//sm:sitemap/sm:loc", SITEMAP_NS)
         if sitemap_locs:
-            # It's an index - fetch child sitemaps (limit to 10)
-            for sitemap_loc in sitemap_locs[:10]:
+            # It's an index - fetch child sitemaps (limit to 20)
+            for sitemap_loc in sitemap_locs[:20]:
                 child_url = sitemap_loc.text
                 if child_url:
                     try:
-                        child_response = await client.get(child_url, timeout=30.0)
+                        child_response = await client.get(child_url, timeout=30.0, follow_redirects=True)
                         if child_response.status_code == 200:
                             child_root = ET.fromstring(child_response.content)
                             for url_elem in child_root.findall(".//sm:url", SITEMAP_NS):
@@ -91,6 +67,28 @@ async def fetch_sitemap_urls(client: httpx.AsyncClient, sitemap_url: str) -> lis
     return urls
 
 
+def _derive_sitemap_urls(site_url: str) -> list[str]:
+    """Given a website URL, derive common sitemap locations to try.
+
+    If the URL already points to an XML file, return it as-is.
+    Otherwise, return a list of common sitemap paths to probe.
+    """
+    site_url = site_url.strip().rstrip("/")
+
+    # If the user gave us an explicit sitemap URL, just use that
+    if site_url.endswith(".xml") or "sitemap" in site_url.lower():
+        return [site_url]
+
+    # Otherwise, try common locations
+    parsed = urlparse(site_url)
+    base = f"{parsed.scheme}://{parsed.netloc}"
+    return [
+        f"{base}/sitemap.xml",
+        f"{base}/sitemap_index.xml",
+        f"{base}/sitemap/sitemap-index.xml",
+    ]
+
+
 def create_query_variations(query: str) -> list[str]:
     """Create variations of a query for matching."""
     query_lower = query.lower().strip()
@@ -99,65 +97,77 @@ def create_query_variations(query: str) -> list[str]:
     # Add slug variations
     variations.append(query_lower.replace(" ", "-"))
     variations.append(query_lower.replace(" ", "_"))
+    variations.append(query_lower.replace("-", " "))
+    variations.append(query_lower.replace("_", " "))
     variations.append(query_lower.replace("-", ""))
     variations.append(query_lower.replace("_", ""))
     
-    # Add synonym variations
-    for key, syns in SYNONYMS.items():
-        if key in query_lower or any(s in query_lower for s in syns):
-            variations.extend(syns)
-            variations.append(key)
-    
-    return list(set(variations))
+    return list(set(v for v in variations if v))
 
 
 def categorize_url(url: str) -> str | None:
-    """Categorize a URL by content type."""
+    """Categorize a URL by content type based on common path patterns."""
     url_lower = url.lower()
-    if "/blog/" in url_lower:
+    if "/blog/" in url_lower or "/posts/" in url_lower or "/articles/" in url_lower:
         return "blog"
-    elif "/docs/" in url_lower:
+    elif "/docs/" in url_lower or "/documentation/" in url_lower or "/reference/" in url_lower:
         return "docs"
-    elif "/guides/" in url_lower or "/guide/" in url_lower:
+    elif "/guides/" in url_lower or "/guide/" in url_lower or "/how-to/" in url_lower:
         return "guides"
-    elif "/templates/" in url_lower or "/template/" in url_lower:
+    elif "/templates/" in url_lower or "/template/" in url_lower or "/starters/" in url_lower:
         return "templates"
-    elif "/plugins/" in url_lower or "/plugin/" in url_lower or "/exchange/" in url_lower:
+    elif "/plugins/" in url_lower or "/plugin/" in url_lower or "/extensions/" in url_lower or "/exchange/" in url_lower:
         return "plugins"
-    elif "/learn/" in url_lower:
+    elif "/learn/" in url_lower or "/tutorials/" in url_lower or "/tutorial/" in url_lower:
         return "learn"
-    elif "/resources/" in url_lower:
+    elif "/resources/" in url_lower or "/whitepapers/" in url_lower or "/ebooks/" in url_lower:
         return "resources"
-    elif "/customers/" in url_lower or "/case-stud" in url_lower:
+    elif "/customers/" in url_lower or "/case-stud" in url_lower or "/success-stor" in url_lower:
         return "customer_stories"
+    elif "/pricing" in url_lower:
+        return "pricing"
+    elif "/changelog" in url_lower or "/releases/" in url_lower:
+        return "changelog"
     return None
 
 
 @tool
-async def sanity_sitemap_lookup(query: str) -> str:
+async def sitemap_lookup(site_url: str, query: str) -> str:
     """
-    Comprehensive lookup of Sanity.io sitemap and existing content.
-    Fetches ALL sitemaps and performs thorough matching including partial matches,
-    related terms, and content categorization.
+    Look up a website's sitemap and search for content matching a query.
+    Fetches the sitemap (handling indexes automatically), then performs
+    thorough matching including partial matches and content categorization.
 
-    Use this BEFORE recommending new content to verify it doesn't already exist.
+    Use this to check what content a site already has on a topic before
+    recommending new content.
     
     Args:
-        query: Search term to look for in the sitemap
+        site_url: The website URL or sitemap URL to scan.
+                  Examples: "https://www.sanity.io", "https://example.com/sitemap.xml"
+        query: Search term to look for in the sitemap URLs.
         
     Returns:
-        Analysis of sitemap coverage for the query
+        Analysis of sitemap coverage for the query.
     """
+    sitemap_candidates = _derive_sitemap_urls(site_url)
+
     async with httpx.AsyncClient() as client:
-        # Fetch all URLs from all sitemaps
+        # Fetch all URLs from discovered sitemaps
         all_urls: list[dict[str, Any]] = []
+        sitemaps_found = 0
         
-        for sitemap_url in SANITY_SITEMAP_URLS:
+        for sitemap_url in sitemap_candidates:
             urls = await fetch_sitemap_urls(client, sitemap_url)
-            all_urls.extend(urls)
+            if urls:
+                sitemaps_found += 1
+                all_urls.extend(urls)
         
         if not all_urls:
-            return "Could not fetch sitemap. Error connecting to Sanity.io sitemaps."
+            return (
+                f"Could not fetch sitemap for {site_url}. "
+                f"Tried: {', '.join(sitemap_candidates)}. "
+                f"The site may not have a publicly accessible sitemap."
+            )
         
         # Remove duplicates while preserving order
         seen = set()
@@ -173,6 +183,10 @@ async def sanity_sitemap_lookup(query: str) -> str:
         query_terms = query_lower.replace("-", " ").replace("_", " ").split()
         query_variations = create_query_variations(query)
         
+        # Derive the site's base path for stripping from URLs
+        parsed = urlparse(site_url)
+        base_domain = f"{parsed.scheme}://{parsed.netloc}/"
+        
         # Find matches with different confidence levels
         exact_matches = []
         strong_matches = []
@@ -181,7 +195,7 @@ async def sanity_sitemap_lookup(query: str) -> str:
         for item in all_urls:
             url = item["url"]
             url_lower = url.lower()
-            url_path = url_lower.replace("https://www.sanity.io/", "").replace("https://sanity.io/", "")
+            url_path = url_lower.replace(base_domain.lower(), "")
             
             # Exact match in URL
             if query_lower in url_path or query_lower.replace(" ", "-") in url_path:
@@ -197,40 +211,28 @@ async def sanity_sitemap_lookup(query: str) -> str:
                 partial_matches.append(item)
         
         # Categorize all URLs
-        categories = {
-            "blog": 0,
-            "docs": 0,
-            "guides": 0,
-            "templates": 0,
-            "plugins": 0,
-            "learn": 0,
-            "resources": 0,
-            "customer_stories": 0,
-        }
+        categories: dict[str, int] = {}
         for item in all_urls:
             cat = categorize_url(item["url"])
             if cat:
-                categories[cat] += 1
+                categories[cat] = categories.get(cat, 0) + 1
         
         # Build result
         result = f"""
-SANITY.IO SITEMAP ANALYSIS - COMPREHENSIVE
-==========================================
+SITEMAP ANALYSIS: {site_url}
+{'=' * 50}
 
 Total URLs indexed: {len(all_urls)}
+Sitemaps found: {sitemaps_found}
+"""
+        if categories:
+            result += "\nContent by category:\n"
+            for cat, count in sorted(categories.items(), key=lambda x: -x[1]):
+                result += f"- {cat.replace('_', ' ').title()}: {count}\n"
 
-Content by category:
-- Blog posts: {categories['blog']}
-- Documentation: {categories['docs']}
-- Guides: {categories['guides']}
-- Templates: {categories['templates']}
-- Plugins/Exchange: {categories['plugins']}
-- Learn: {categories['learn']}
-- Resources: {categories['resources']}
-- Customer Stories: {categories['customer_stories']}
-
+        result += f"""
 SEARCH RESULTS FOR: "{query}"
-=============================
+{'=' * 35}
 
 EXACT MATCHES ({len(exact_matches)}):
 """
@@ -271,63 +273,41 @@ EXACT MATCHES ({len(exact_matches)}):
 
 
 @tool
-async def sanity_content_audit(content_area: str) -> str:
+async def content_audit(site_url: str, query: str = "") -> str:
     """
-    Perform a content audit for a specific area of Sanity.io.
+    Perform a content audit on any website by scanning its sitemap.
+    Categorises URLs by content type and freshness (based on lastmod dates).
+    Optionally filters to URLs matching a query.
 
     Args:
-        content_area: Area to audit. Options:
-            - 'ai': All AI/ML/LLM related content
-            - 'integrations': Integration guides and docs
-            - 'comparisons': Competitor comparison content
-            - 'tutorials': Tutorial and how-to content
-            - 'enterprise': Enterprise-focused content
-            - 'developer': Developer experience content
-            - 'all': Full content inventory
+        site_url: The website URL or sitemap URL to audit.
+                  Examples: "https://www.sanity.io", "https://example.com/sitemap.xml"
+        query: Optional filter — only show URLs containing this term.
+               Leave empty for a full inventory.
 
     Returns:
-        Categorized URLs with freshness indicators where available.
+        Categorized URL inventory with freshness indicators.
     """
-    # Define search patterns for each area
-    area_patterns = {
-        "ai": ["ai", "artificial-intelligence", "machine-learning", "ml", "llm",
-               "gpt", "chatgpt", "claude", "generative", "openai", "anthropic",
-               "vector", "embedding", "rag", "retrieval"],
-        "integrations": ["integration", "integrate", "connect", "webhook",
-                         "api", "sdk", "plugin", "extension"],
-        "comparisons": ["vs", "versus", "comparison", "compare", "alternative",
-                        "contentful", "strapi", "wordpress", "prismic", "dato"],
-        "tutorials": ["tutorial", "how-to", "guide", "getting-started", "learn",
-                      "walkthrough", "step-by-step", "example"],
-        "enterprise": ["enterprise", "security", "compliance", "sso", "saml",
-                       "governance", "audit", "scale", "migration"],
-        "developer": ["developer", "groq", "schema", "query", "typescript",
-                      "javascript", "react", "next", "gatsby", "nuxt", "vue"],
-    }
-    
-    if content_area == "all":
-        patterns = []
-        for p_list in area_patterns.values():
-            patterns.extend(p_list)
-    elif content_area in area_patterns:
-        patterns = area_patterns[content_area]
-    else:
-        return f"ERROR: Unknown content_area '{content_area}'. Options: {list(area_patterns.keys()) + ['all']}"
-    
+    sitemap_candidates = _derive_sitemap_urls(site_url)
+
     async with httpx.AsyncClient() as client:
-        # Fetch URLs from key sitemaps
+        # Fetch URLs from sitemaps
         all_urls: list[dict[str, Any]] = []
-        key_sitemaps = [
-            "https://www.sanity.io/sitemap.xml",
-            "https://www.sanity.io/docs/sitemap.xml",
-            "https://www.sanity.io/blog-sitemap.xml",
-            "https://www.sanity.io/guides-sitemap.xml",
-        ]
+        sitemaps_found = 0
         
-        for sitemap_url in key_sitemaps:
+        for sitemap_url in sitemap_candidates:
             urls = await fetch_sitemap_urls(client, sitemap_url)
-            all_urls.extend(urls)
+            if urls:
+                sitemaps_found += 1
+                all_urls.extend(urls)
         
+        if not all_urls:
+            return (
+                f"Could not fetch sitemap for {site_url}. "
+                f"Tried: {', '.join(sitemap_candidates)}. "
+                f"The site may not have a publicly accessible sitemap."
+            )
+
         # Remove duplicates
         seen = set()
         unique_urls = []
@@ -337,21 +317,25 @@ async def sanity_content_audit(content_area: str) -> str:
                 unique_urls.append(item)
         all_urls = unique_urls
         
-        # Filter by content area patterns
-        matching_urls = []
-        for item in all_urls:
-            url_lower = item["url"].lower()
-            if any(p in url_lower for p in patterns):
-                matching_urls.append(item)
+        # Filter by query if provided
+        if query.strip():
+            query_lower = query.lower().strip()
+            query_variations = create_query_variations(query)
+            matching_urls = [
+                item for item in all_urls
+                if any(v in item["url"].lower() for v in query_variations)
+            ]
+        else:
+            matching_urls = all_urls
         
         # Sort by lastmod if available
         matching_urls.sort(key=lambda x: x.get("lastmod") or "", reverse=True)
         
         # Categorize by freshness
         now = datetime.now()
-        fresh = []  # Updated in last 3 months
-        moderate = []  # Updated 3-12 months ago
-        stale = []  # Updated > 12 months ago
+        fresh = []    # Updated in last 3 months
+        moderate = [] # Updated 3-12 months ago
+        stale = []    # Updated > 12 months ago
         unknown = []  # No lastmod
         
         for item in matching_urls:
@@ -369,55 +353,69 @@ async def sanity_content_audit(content_area: str) -> str:
                     unknown.append(item)
             else:
                 unknown.append(item)
-        
+
+        # Categorize by content type
+        categories: dict[str, int] = {}
+        for item in matching_urls:
+            cat = categorize_url(item["url"]) or "other"
+            categories[cat] = categories.get(cat, 0) + 1
+
+        filter_label = f' (filtered by "{query}")' if query.strip() else ""
+
         result = f"""
-SANITY.IO CONTENT AUDIT: {content_area.upper()}
+CONTENT AUDIT: {site_url}{filter_label}
 {'=' * 50}
 
 Total URLs scanned: {len(all_urls)}
 Matching URLs: {len(matching_urls)}
+Sitemaps found: {sitemaps_found}
+"""
+        if categories:
+            result += "\nContent by type:\n"
+            for cat, count in sorted(categories.items(), key=lambda x: -x[1]):
+                result += f"  {cat.replace('_', ' ').title()}: {count}\n"
 
-CONTENT INVENTORY:
+        result += f"""
+FRESHNESS BREAKDOWN:
 
 FRESH (< 3 months): {len(fresh)}
 """
-        for item in fresh[:10]:
+        for item in fresh[:15]:
             date_str = item.get("lastmod", "N/A")[:10] if item.get("lastmod") else "N/A"
             result += f"  ✓ [{date_str}] {item['url']}\n"
+        if len(fresh) > 15:
+            result += f"  ... and {len(fresh) - 15} more\n"
         
         result += f"\nMODERATE (3-12 months): {len(moderate)}\n"
-        for item in moderate[:10]:
+        for item in moderate[:15]:
             date_str = item.get("lastmod", "N/A")[:10] if item.get("lastmod") else "N/A"
             result += f"  ~ [{date_str}] {item['url']}\n"
+        if len(moderate) > 15:
+            result += f"  ... and {len(moderate) - 15} more\n"
         
         result += f"\nSTALE (> 12 months): {len(stale)}\n"
-        for item in stale[:10]:
+        for item in stale[:15]:
             date_str = item.get("lastmod", "N/A")[:10] if item.get("lastmod") else "N/A"
             result += f"  ⚠ [{date_str}] {item['url']}\n"
+        if len(stale) > 15:
+            result += f"  ... and {len(stale) - 15} more\n"
         
         result += f"\nUNKNOWN DATE: {len(unknown)}\n"
         for item in unknown[:10]:
             result += f"  ? {item['url']}\n"
-        
-        # AI content gap analysis
-        if content_area == "ai":
-            expected_ai_topics = [
-                "ai content generation", "llm integration", "vector search",
-                "rag architecture", "ai workflows", "prompt engineering",
-                "ai-powered cms", "content ai", "generative ai cms",
-                "ai personalization", "ai content strategy", "ai seo"
-            ]
-            
-            result += "\n\nAI CONTENT GAP ANALYSIS:\n"
-            result += "Expected AI topics and coverage:\n"
-            
-            for topic in expected_ai_topics:
-                topic_found = any(
-                    topic.replace(" ", "-") in item["url"].lower() or
-                    topic.replace(" ", "") in item["url"].lower()
-                    for item in matching_urls
-                )
-                status = "✓ Covered" if topic_found else "⚠ MISSING"
-                result += f"  {status}: {topic}\n"
+        if len(unknown) > 10:
+            result += f"  ... and {len(unknown) - 10} more\n"
+
+        # Summary
+        total_dated = len(fresh) + len(moderate) + len(stale)
+        if total_dated > 0:
+            stale_pct = round(len(stale) / total_dated * 100)
+            result += f"\n📊 FRESHNESS SCORE: {stale_pct}% of dated content is stale (>12 months).\n"
+            if stale_pct > 40:
+                result += "   ⚠ High staleness — consider a content refresh programme.\n"
+            elif stale_pct > 20:
+                result += "   📝 Moderate staleness — prioritise updating key pages.\n"
+            else:
+                result += "   ✅ Content is relatively fresh.\n"
         
         return result

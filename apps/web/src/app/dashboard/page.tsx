@@ -113,9 +113,6 @@ export default function DashboardPage() {
     [sendAnswer],
   );
 
-  // ── Derived state ─────────────────────────────────────────
-  const errorCount = messages.filter((m) => m.type === 'error').length;
-
   return (
     <>
       <ToastContainer toasts={toasts} onDismiss={dismissToast} />
@@ -146,62 +143,14 @@ export default function DashboardPage() {
             />
           </div>
 
-          {/* Sidebar activity panel */}
-          <div className="lg:w-96 border-t lg:border-t-0 lg:border-l border-border p-4 bg-surface-muted">
+          {/* Sidebar: run overview + outputs */}
+          <div className="lg:w-96 border-t lg:border-t-0 lg:border-l border-border p-4 bg-surface-muted overflow-y-auto">
             <AgentActivityFeed
               messages={messages}
               isConnected={isConnected}
               isRunning={isRunning}
               currentRunId={currentRunId}
             />
-
-            {errorCount > 0 && (
-              <div className="mt-3 p-3 bg-red-50 border border-red-200 rounded-lg">
-                <div className="flex items-center gap-2">
-                  <span className="text-red-500">⚠️</span>
-                  <span className="text-sm text-red-700">
-                    {errorCount} error{errorCount > 1 ? 's' : ''} during run
-                  </span>
-                </div>
-              </div>
-            )}
-
-            <div className="mt-4 bg-surface rounded-lg p-4 border border-border">
-              <h4 className="text-sm font-semibold text-foreground mb-2">Status</h4>
-              {activeConvId ? (
-                <div className="space-y-2">
-                  {currentRunId && (
-                    <p className="text-xs text-muted-foreground font-mono break-all">{currentRunId}</p>
-                  )}
-                  <div className="flex items-center gap-2">
-                    <span
-                      className={`w-2 h-2 rounded-full ${
-                        awaitingInput
-                          ? 'bg-amber-500 animate-pulse'
-                          : isRunning
-                            ? 'bg-blue-500 animate-pulse'
-                            : isConnected
-                              ? 'bg-green-500'
-                              : 'bg-gray-400'
-                      }`}
-                    />
-                    <span className="text-sm text-muted-foreground">
-                      {awaitingInput
-                        ? 'Awaiting your answer'
-                        : isRunning
-                          ? 'Running…'
-                          : isConnected
-                            ? 'Connected — ready'
-                            : 'Not connected'}
-                    </span>
-                  </div>
-                </div>
-              ) : (
-                <p className="text-sm text-muted-foreground">
-                  Start a new chat or select one from the sidebar.
-                </p>
-              )}
-            </div>
           </div>
         </div>
       </main>

@@ -31,6 +31,7 @@ export interface ConversationMessage {
   output?: string;
   message?: string; // for error type
   status?: string;  // for status type
+  replayed?: boolean; // true for messages replayed from history on reconnect
   timestamp: string;
 }
 
@@ -176,6 +177,13 @@ export function useConversation(
               data.id ||
               `${data.type}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
           };
+
+          // For replayed (historical) messages, just add to the list
+          // without triggering state changes or callbacks.
+          if (msg.replayed) {
+            setMessages((prev) => [...prev, msg]);
+            return;
+          }
 
           switch (msg.type) {
             case 'question':
