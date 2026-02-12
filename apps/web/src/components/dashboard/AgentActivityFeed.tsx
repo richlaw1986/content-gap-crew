@@ -3,6 +3,7 @@
 import { useMemo, useState } from 'react';
 import type { ConversationMessage } from '@/lib/hooks/useConversation';
 import { MarkdownContent } from './MarkdownContent';
+import { parseArtifacts, type Artifact } from '@/lib/parseArtifacts';
 
 interface AgentActivityFeedProps {
   messages?: ConversationMessage[];
@@ -25,14 +26,19 @@ function formatTime(ts: string) {
   }
 }
 
-/** Extract a short title from a long output. */
-function outputTitle(content: string): string {
-  // Try to find a markdown heading
-  const headingMatch = content.match(/^#{1,3}\s+(.+)/m);
-  if (headingMatch) return headingMatch[1].slice(0, 80);
-  // Fall back to first non-empty line
-  const firstLine = content.split('\n').find((l) => l.trim().length > 0);
-  return firstLine ? firstLine.slice(0, 80) : 'Output';
+// ── Output item type ──────────────────────────────────────────
+
+interface OutputItem {
+  id: string;
+  /** Display title (filename for code, heading for prose) */
+  title: string;
+  /** Language hint for code files */
+  language?: string;
+  content: string;
+  sender: string;
+  timestamp: string;
+  /** Whether this is a code file (show raw) or prose (show markdown) */
+  isCode: boolean;
 }
 
 // ── Component ──────────────────────────────────────────────────
@@ -43,7 +49,8 @@ export function AgentActivityFeed({
   isRunning = false,
   currentRunId = null,
 }: AgentActivityFeedProps) {
-  const [expandedOutputIdx, setExpandedOutputIdx] = useState<number | null>(null);
+  const [expandedOutputId, setExpandedOutputId] = useState<string | null>(null);
+  const [copiedId, setCopiedId] = useState<string | null>(null);
 
   // ── Derived stats ─────────────────────────────────────────
   const stats = useMemo(() => {
@@ -67,49 +74,56 @@ export function AgentActivityFeed({
     return { toolCalls: toolCalls.length, toolNames, msgCount, errorCount, agentNames };
   }, [messages]);
 
-  // ── Outputs: completed run outputs + significant agent deliverables ──
+  // ── Outputs: split complete outputs into individual files ──
   const outputs = useMemo(() => {
-    const items: Array<{
-      id: string;
-      title: string;
-      content: string;
-      sender: string;
-      timestamp: string;
-      type: 'deliverable' | 'tool_result';
-    }> = [];
+    const items: OutputItem[] = [];
 
     for (const m of messages) {
-      // Final run output
-      if (m.type === 'complete' && m.output) {
+      if (m.type !== 'complete' || !m.output) continue;
+
+      const artifacts = parseArtifacts(m.output);
+
+      if (artifacts.length > 1 || (artifacts.length === 1 && artifacts[0].filename !== 'Output')) {
+        // Multiple files — show each as a separate item
+        for (const artifact of artifacts) {
+          const isCode = artifact.language !== 'text' && artifact.language !== 'markdown';
+          items.push({
+            id: `${m.id}-${artifact.filename}`,
+            title: artifact.filename,
+            language: artifact.language,
+            content: artifact.content,
+            sender: 'Crew',
+            timestamp: m.timestamp,
+            isCode,
+          });
+        }
+      } else {
+        // Single prose output
+        const heading = m.output.match(/^#{1,3}\s+(.+)/m);
+        const firstLine = m.output.split('\n').find((l) => l.trim().length > 0);
         items.push({
           id: m.id,
-          title: outputTitle(m.output),
+          title: heading ? heading[1].slice(0, 80) : (firstLine?.slice(0, 80) || 'Output'),
           content: m.output,
           sender: 'Crew',
           timestamp: m.timestamp,
-          type: 'deliverable',
-        });
-      }
-      // Large agent messages (likely deliverables, not chit-chat)
-      if (
-        m.type === 'agent_message' &&
-        m.content &&
-        m.content.length > 500 &&
-        m.sender !== 'system'
-      ) {
-        items.push({
-          id: m.id,
-          title: outputTitle(m.content),
-          content: m.content,
-          sender: m.sender,
-          timestamp: m.timestamp,
-          type: 'deliverable',
+          isCode: false,
         });
       }
     }
 
     return items;
   }, [messages]);
+
+  const handleCopy = async (id: string, content: string) => {
+    try {
+      await navigator.clipboard.writeText(content);
+      setCopiedId(id);
+      setTimeout(() => setCopiedId(null), 2000);
+    } catch {
+      // ignore
+    }
+  };
 
   return (
     <div className="space-y-4">
@@ -134,7 +148,6 @@ export function AgentActivityFeed({
         </div>
 
         <div className="p-4 space-y-3">
-          {/* Stat grid */}
           <div className="grid grid-cols-3 gap-3">
             <div className="text-center">
               <p className="text-xl font-semibold text-foreground">{stats.msgCount}</p>
@@ -152,7 +165,6 @@ export function AgentActivityFeed({
             </div>
           </div>
 
-          {/* Agents involved */}
           {stats.agentNames.length > 0 && (
             <div>
               <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1.5">Agents</p>
@@ -170,7 +182,6 @@ export function AgentActivityFeed({
             </div>
           )}
 
-          {/* Tools used */}
           {stats.toolNames.length > 0 && (
             <div>
               <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1.5">Tools Used</p>
@@ -187,7 +198,6 @@ export function AgentActivityFeed({
             </div>
           )}
 
-          {/* Current run ID */}
           {currentRunId && (
             <p className="text-[10px] text-muted-foreground font-mono truncate">
               Run: {currentRunId}
@@ -201,7 +211,7 @@ export function AgentActivityFeed({
         <div className="px-4 py-3 border-b border-border flex items-center justify-between">
           <h3 className="text-sm font-semibold text-foreground">Outputs</h3>
           {outputs.length > 0 && (
-            <span className="text-xs text-muted-foreground">{outputs.length} item{outputs.length !== 1 ? 's' : ''}</span>
+            <span className="text-xs text-muted-foreground">{outputs.length} file{outputs.length !== 1 ? 's' : ''}</span>
           )}
         </div>
 
@@ -212,31 +222,37 @@ export function AgentActivityFeed({
               {isRunning ? 'Agents are working…' : 'No outputs yet'}
             </p>
             <p className="text-xs text-muted-foreground mt-1">
-              Deliverables and documents will appear here.
+              Files and deliverables will appear here.
             </p>
           </div>
         ) : (
           <ul className="divide-y divide-border">
-            {outputs.map((item, idx) => {
-              const isExpanded = expandedOutputIdx === idx;
+            {outputs.map((item) => {
+              const isExpanded = expandedOutputId === item.id;
+              const isCopied = copiedId === item.id;
               return (
                 <li key={item.id} className="group">
-                  {/* Collapsed row */}
+                  {/* Row header */}
                   <button
-                    onClick={() => setExpandedOutputIdx(isExpanded ? null : idx)}
+                    onClick={() => setExpandedOutputId(isExpanded ? null : item.id)}
                     className="w-full px-4 py-3 flex items-start gap-3 text-left hover:bg-surface-muted transition-colors"
                   >
-                    <span className="text-lg flex-shrink-0 mt-0.5">
-                      {item.type === 'deliverable' ? '📄' : '🔧'}
+                    <span className="text-base flex-shrink-0 mt-0.5">
+                      {item.isCode ? '📝' : '📄'}
                     </span>
                     <div className="flex-1 min-w-0">
                       <p className="text-sm font-medium text-foreground truncate">{item.title}</p>
                       <div className="flex items-center gap-2 mt-0.5">
-                        <span className="text-xs text-muted-foreground">{item.sender}</span>
+                        {item.language && item.language !== 'text' && (
+                          <span className="text-[10px] uppercase tracking-wider text-muted-foreground">{item.language}</span>
+                        )}
                         <span className="text-xs text-muted-foreground">{formatTime(item.timestamp)}</span>
                       </div>
                     </div>
-                    <span className="text-xs text-muted-foreground flex-shrink-0 mt-1 transition-transform" style={{ transform: isExpanded ? 'rotate(180deg)' : 'none' }}>
+                    <span
+                      className="text-xs text-muted-foreground flex-shrink-0 mt-1 transition-transform"
+                      style={{ transform: isExpanded ? 'rotate(180deg)' : 'none' }}
+                    >
                       ▼
                     </span>
                   </button>
@@ -244,9 +260,23 @@ export function AgentActivityFeed({
                   {/* Expanded content */}
                   {isExpanded && (
                     <div className="px-4 pb-4 border-t border-border/50">
-                      <div className="mt-3 max-h-96 overflow-y-auto rounded-md bg-surface-muted p-3">
-                        <MarkdownContent content={item.content} />
+                      <div className="flex justify-end mt-2 mb-1">
+                        <button
+                          onClick={() => handleCopy(item.id, item.content)}
+                          className="text-xs text-muted-foreground hover:text-foreground transition-colors px-2 py-0.5 rounded border border-border/40"
+                        >
+                          {isCopied ? '✓ Copied' : 'Copy'}
+                        </button>
                       </div>
+                      {item.isCode ? (
+                        <pre className="max-h-96 overflow-auto rounded-md bg-surface-muted p-3 text-xs font-mono leading-relaxed text-foreground/90">
+                          <code>{item.content}</code>
+                        </pre>
+                      ) : (
+                        <div className="max-h-96 overflow-y-auto rounded-md bg-surface-muted p-3">
+                          <MarkdownContent content={item.content} />
+                        </div>
+                      )}
                     </div>
                   )}
                 </li>
