@@ -1028,7 +1028,9 @@ MODERATE (e.g. "compare ISR vs SSR for my e-commerce site", "create a migration 
 
 COMPLEX (e.g. "create a content strategy for X", "create a PPC campaign plan", "analyze our content gaps across SEO and LLM traffic", "build an SEO plan for our product launch"):
   → ALWAYS ask 2-3 clarifying questions BEFORE starting. These are essential to produce useful output.
-  → Examples of good clarifying questions: budget/spend range, target market/geo, goals (leads vs awareness vs revenue), timeline, existing assets/constraints, industry/vertical.
+  → If the request involves analyzing, auditing, or comparing a WEBSITE (content gap analysis, SEO audit, site review, competitor analysis), you MUST ask which website/URL to target. NEVER assume a default — the user must tell you.
+  → Examples of good clarifying questions: target website/URL, competitors to compare against, budget/spend range, target market/geo, goals (leads vs awareness vs revenue), timeline, existing assets/constraints, industry/vertical.
+  → Even if a skill playbook was selected, ask clarifying questions for any information the skill needs that wasn't already provided (e.g. target URL, competitors, topic focus).
   → Use the REVIEW LOOP pattern with MORE specialist agents contributing.
   → Structure: multiple agents each draft their section → reviewer consolidates feedback → lead agent produces final output.
   → 3-4 agents. Each specialist contributes their perspective (e.g. SEO analysis, marketing positioning, data insights) BEFORE the review step.

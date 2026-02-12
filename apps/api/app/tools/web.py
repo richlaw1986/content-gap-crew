@@ -1,4 +1,8 @@
-"""Web scraping and content fetching tools."""
+"""Web scraping and content fetching tools.
+
+All tool functions are **synchronous** because CrewAI's ``crew.kickoff()``
+runs in a thread-pool (``run_in_executor``) with no event loop.
+"""
 
 import re
 import time
@@ -11,7 +15,7 @@ from crewai.tools import tool
 
 
 @tool
-async def fetch_webpage_content(url: str) -> str:
+def fetch_webpage_content(url: str) -> str:
     """
     Fetch and extract main text content from a webpage.
     Useful for analyzing competitor content depth and structure.
@@ -27,8 +31,8 @@ async def fetch_webpage_content(url: str) -> str:
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
         }
         
-        async with httpx.AsyncClient() as client:
-            response = await client.get(url, headers=headers, timeout=30.0, follow_redirects=True)
+        with httpx.Client() as client:
+            response = client.get(url, headers=headers, timeout=30.0, follow_redirects=True)
             response.raise_for_status()
             
             soup = BeautifulSoup(response.content, "html.parser")
@@ -113,7 +117,7 @@ MAIN CONTENT:
 
 
 @tool
-async def fetch_and_compare_urls(urls: str) -> str:
+def fetch_and_compare_urls(urls: str) -> str:
     """
     Fetch and compare content from multiple URLs side by side.
     Essential for competitor gap analysis.
@@ -135,7 +139,7 @@ async def fetch_and_compare_urls(urls: str) -> str:
     results = []
     
     for url in url_list:
-        content = await fetch_webpage_content(url)
+        content = fetch_webpage_content(url)
         
         # Parse metrics from the content analysis
         word_count = 0
@@ -322,7 +326,7 @@ ENTITY GROUNDING:
 
 
 @tool
-async def competitor_content_gaps(site_url: str, topic: str, competitor_urls: str = "") -> str:
+def competitor_content_gaps(site_url: str, topic: str, competitor_urls: str = "") -> str:
     """
     Analyze competitor content for a topic and identify gaps where your site
     is missing content that competitors have.
@@ -342,7 +346,7 @@ async def competitor_content_gaps(site_url: str, topic: str, competitor_urls: st
     from app.tools.sitemap import sitemap_lookup
     
     # Check your site's coverage
-    your_check = await sitemap_lookup(site_url, topic)
+    your_check = sitemap_lookup(site_url, topic)
     
     # Parse competitor URLs or use defaults
     if competitor_urls.strip():
@@ -376,7 +380,7 @@ COMPETITOR SITEMAPS (checking for same topic):
     for comp_url in comp_list:
         comp_name = urlparse(comp_url).netloc
         try:
-            comp_check = await sitemap_lookup(comp_url, topic)
+            comp_check = sitemap_lookup(comp_url, topic)
             # Extract just the match counts from the result
             result += f"\n{comp_name}:\n"
             for line in comp_check.split("\n"):

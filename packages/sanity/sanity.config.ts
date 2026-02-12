@@ -5,7 +5,7 @@ import {schemaTypes} from './schemas'
 
 export default defineConfig({
   name: 'content-gap-crew',
-  title: 'Content Gap Crew',
+  title: 'Agent Studio',
 
   // TODO: Replace with actual project ID and dataset
   projectId: process.env.SANITY_STUDIO_PROJECT_ID || 'lxn44moi',

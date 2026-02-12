@@ -360,6 +360,26 @@ class CrewRunner:
         if output_style:
             sections.append(f"## Output Style\n{output_style}")
 
+        # Knowledge documents — inject extracted summaries
+        knowledge_docs: list[dict[str, Any]] = agent_config.get("knowledgeDocuments") or []
+        doc_sections: list[str] = []
+        for doc in knowledge_docs:
+            if not isinstance(doc, dict):
+                continue
+            summary = (doc.get("extractedSummary") or "").strip()
+            if not summary:
+                continue
+            title = (doc.get("title") or "Untitled Document").strip()
+            desc = (doc.get("description") or "").strip()
+            header = f"### {title}"
+            if desc:
+                header += f"\n_{desc}_"
+            doc_sections.append(f"{header}\n{summary}")
+        if doc_sections:
+            sections.append(
+                "## Knowledge Documents\n" + "\n\n".join(doc_sections)
+            )
+
         # Legacy / freeform backstory — append if present
         legacy = (agent_config.get("backstory") or "").strip()
         if legacy:
@@ -396,18 +416,24 @@ class CrewRunner:
         """
         # Build tools for this agent
         tools = []
-        for tool_config in agent_config.get("tools", []):
+        agent_name = agent_config.get("name") or agent_config.get("role") or "unknown"
+        raw_tools = agent_config.get("tools") or []
+        logger.info(f"Building tools for agent '{agent_name}': {len(raw_tools)} tool configs found")
+        for tool_config in raw_tools:
             if tool_config.get("enabled", True):
                 try:
                     tool = self._build_tool(tool_config)
                     tools.append(tool)
+                    logger.info(f"  ✓ Built tool: {tool_config.get('name')}")
                 except Exception as e:
                     # Log but continue — agent can work with fewer tools
-                    logger.warning(f"Could not build tool {tool_config.get('name')}: {e}")
+                    logger.warning(f"  ✗ Could not build tool {tool_config.get('name')}: {e}")
 
         # Attach MCP tools (available to all agents)
         if self._mcp_tools:
             tools.extend(self._mcp_tools)
+
+        logger.info(f"Agent '{agent_name}' equipped with {len(tools)} tools total")
         
         llm_model = agent_config.get("llmModel") or agent_config.get("llmTier")
 

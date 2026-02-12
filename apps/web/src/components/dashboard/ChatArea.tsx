@@ -11,7 +11,7 @@ interface ChatAreaProps {
   isRunning?: boolean;
   awaitingInput?: boolean;
   onSendMessage?: (content: string) => void;
-  onSendAnswer?: (content: string, questionId?: string) => void;
+  onSendAnswer?: (content: string, questionId?: string, displayContent?: string) => void;
 }
 
 const WELCOME_MESSAGE: ConversationMessage = {
@@ -117,7 +117,7 @@ function SelectionQuestion({
   onSubmit,
 }: {
   msg: ConversationMessage;
-  onSubmit: (value: string, questionId?: string) => void;
+  onSubmit: (value: string, questionId?: string, displayContent?: string) => void;
 }) {
   const isRadio = msg.selectionType !== 'checkbox';
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -131,23 +131,37 @@ function SelectionQuestion({
         // Radio: single select — replace
         return new Set([value]);
       }
-      // Checkbox: toggle
-      if (next.has(value)) next.delete(value);
-      else next.add(value);
+      // Checkbox: toggle with mutual exclusion for __none__
+      if (next.has(value)) {
+        next.delete(value);
+      } else {
+        next.add(value);
+        // Selecting "__none__" clears all real skills
+        if (value === '__none__') {
+          return new Set(['__none__']);
+        }
+        // Selecting a real skill clears "__none__"
+        next.delete('__none__');
+      }
       return next;
     });
   };
 
+  const options = msg.options || [];
+
   const handleSubmit = () => {
     if (selected.size === 0) return;
     setSubmitted(true);
+    // Raw value sent to backend
     const answer = isRadio
       ? [...selected][0]
       : JSON.stringify([...selected]);
-    onSubmit(answer, msg.questionId);
+    // Human-readable label shown in chat
+    const labels = [...selected]
+      .map((v) => options.find((o) => o.value === v)?.label || v)
+      .join(', ');
+    onSubmit(answer, msg.questionId, labels);
   };
-
-  const options = msg.options || [];
 
   return (
     <div className="flex justify-start mt-3">
@@ -156,7 +170,7 @@ function SelectionQuestion({
           <span>❓</span>
           <span>{msg.sender}</span>
         </div>
-        <div className="rounded-2xl px-4 py-3 text-sm leading-relaxed bg-amber-50 dark:bg-amber-950/20 text-amber-900 dark:text-amber-200">
+          <div className="rounded-2xl px-4 py-3 text-sm leading-relaxed bg-amber-50 dark:bg-amber-950/20 text-amber-900 dark:text-amber-200">
           <p className="mb-3 font-medium">{msg.content}</p>
           <div className="space-y-2">
             {options.map((opt) => {
@@ -299,10 +313,27 @@ export function ChatArea({
     return true;
   };
 
-  const isCollapsible = (msg: ConversationMessage) => {
+  // Determine which messages should be collapsed into dropdowns.
+  // Collapse only *intermediate work* (drafts, reviews, task outputs).
+  // Show direct replies to the user inline — never collapse those.
+  const isCollapsible = (msg: ConversationMessage, index: number, allVisible: ConversationMessage[]) => {
     if (msg.type !== 'agent_message') return false;
     if (msg.sender === 'system' || msg.sender === 'user') return false;
     if ((msg.content?.length || 0) < 100) return false;
+
+    // If the backend explicitly marked this as a direct reply, show inline
+    if (msg.isReply) return false;
+
+    // Positional heuristic: if the message immediately follows a user
+    // message (or user answer), it's a direct response — show inline.
+    if (index > 0) {
+      const prev = allVisible[index - 1];
+      if (prev && (prev.sender === 'user' || prev.type === 'answer' || prev.type === 'user_message')) {
+        return false;
+      }
+    }
+
+    // Everything else is intermediate work — collapse it
     return true;
   };
 
@@ -318,7 +349,9 @@ export function ChatArea({
     <div className="h-full flex flex-col">
       {/* Messages */}
       <div className="flex-1 overflow-y-auto px-6 py-8 space-y-1 bg-background">
-        {displayMessages.filter(shouldShow).map((msg) => {
+        {(() => {
+          const visibleMessages = displayMessages.filter(shouldShow);
+          return visibleMessages.map((msg, idx) => {
           const isUser = msg.sender === 'user';
           const isSystem = msg.type === 'system';
           const isError = msg.type === 'error';
@@ -327,7 +360,7 @@ export function ChatArea({
           const isQuestion = msg.type === 'question';
 
           // ── Collapsible agent work (drafts, reviews, revisions) ──
-          if (isCollapsible(msg)) {
+          if (isCollapsible(msg, idx, visibleMessages)) {
             return (
               <CollapsibleAgentWork
                 key={msg.id}
@@ -391,17 +424,27 @@ export function ChatArea({
 
           // ── Questions ──
           if (isQuestion) {
-            // Structured selection (crew / skill picker)
-            if (msg.options && msg.options.length > 0) {
+            // Replayed questions were already answered in a previous session.
+            // Check if the very next message in the visible list is an answer
+            // (or the question itself is replayed). In both cases, render
+            // as static read-only text — not interactive buttons.
+            const nextMsg = visibleMessages[idx + 1];
+            const alreadyAnswered =
+              msg.replayed ||
+              (nextMsg && (nextMsg.type === 'answer' || nextMsg.type === 'user_message'));
+
+            if (!alreadyAnswered && msg.options && msg.options.length > 0) {
+              // Structured selection (crew / skill picker) — still live
               return (
                 <SelectionQuestion
                   key={msg.id}
                   msg={msg}
-                  onSubmit={(value, qId) => onSendAnswer?.(value, qId)}
+                  onSubmit={(value, qId, display) => onSendAnswer?.(value, qId, display)}
                 />
               );
             }
-            // Free-text question (clarifying questions etc.)
+
+            // Either already answered (read-only) or a free-text question
             return (
               <div key={msg.id} className="flex justify-start mt-3">
                 <div className="max-w-2xl mr-12">
@@ -411,6 +454,9 @@ export function ChatArea({
                   </div>
                   <div className="rounded-2xl px-4 py-3 text-sm leading-relaxed bg-amber-50 dark:bg-amber-950/20 text-amber-900 dark:text-amber-200">
                     <MarkdownContent content={msg.content || ''} />
+                    {alreadyAnswered && msg.options && (
+                      <div className="mt-1 text-xs text-muted-foreground italic">✓ Answered</div>
+                    )}
                   </div>
                 </div>
               </div>
@@ -443,7 +489,7 @@ export function ChatArea({
             );
           }
 
-          // ── Short agent messages ──
+          // ── Agent messages (short or direct replies) ──
           return (
             <div key={msg.id} className="flex justify-start mt-2">
               <div className="max-w-2xl mr-12">
@@ -456,7 +502,8 @@ export function ChatArea({
               </div>
             </div>
           );
-        })}
+        });
+        })()}
 
         {isRunning && !awaitingInput && (
           <div className="flex justify-start">

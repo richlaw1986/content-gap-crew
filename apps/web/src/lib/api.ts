@@ -54,31 +54,6 @@ export async function fetchApi<T>(endpoint: string, options?: RequestInit): Prom
 // Types
 // =============================================================================
 
-export interface CreateRunRequest {
-  crew_id?: string;
-  objective?: string;
-  inputs: Record<string, unknown>;
-}
-
-export interface Run {
-  id: string;
-  status: 'pending' | 'running' | 'completed' | 'failed' | 'awaiting_input';
-  crew?: {
-    id: string;
-    name: string;
-    slug?: string;
-  };
-  inputs: Record<string, unknown>;
-  objective?: string;
-  questions?: string[];
-  clarification?: string;
-  createdAt?: string;
-  startedAt?: string;
-  completedAt?: string;
-  output?: string;
-  finalOutput?: string;
-}
-
 export interface ConversationSummary {
   _id: string;
   title: string;
@@ -128,24 +103,6 @@ export interface Agent {
 export const api = {
   health: () => fetchApi<{ status: string }>('/api/health'),
 
-  runs: {
-    create: (data: CreateRunRequest) =>
-      fetchApi<Run>('/api/runs', {
-        method: 'POST',
-        body: JSON.stringify(data),
-      }),
-
-    continue: (id: string, inputs: Record<string, unknown>) =>
-      fetchApi<Run>(`/api/runs/${id}/continue`, {
-        method: 'POST',
-        body: JSON.stringify({ inputs }),
-      }),
-
-    get: (id: string) => fetchApi<Run>(`/api/runs/${id}`),
-
-    list: () => fetchApi<Run[]>('/api/runs'),
-  },
-
   conversations: {
     create: (title?: string) =>
       fetchApi<{ id: string; status: string; title: string }>('/api/conversations', {
@@ -156,6 +113,11 @@ export const api = {
     get: (id: string) => fetchApi<ConversationDetail>(`/api/conversations/${id}`),
 
     list: () => fetchApi<ConversationSummary[]>('/api/conversations'),
+
+    delete: (id: string) =>
+      fetchApi<{ deleted: boolean; id: string }>(`/api/conversations/${id}`, {
+        method: 'DELETE',
+      }),
   },
 
   crews: {

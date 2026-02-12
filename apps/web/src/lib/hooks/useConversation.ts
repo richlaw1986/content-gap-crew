@@ -42,6 +42,8 @@ export interface ConversationMessage {
   message?: string; // for error type
   status?: string;  // for status type
   replayed?: boolean; // true for messages replayed from history on reconnect
+  /** True when this agent message is a direct conversational reply (not intermediate work) */
+  isReply?: boolean;
   timestamp: string;
 }
 
@@ -59,7 +61,8 @@ export interface UseConversationReturn {
   awaitingInput: boolean;
   currentRunId: string | null;
   sendMessage: (content: string) => void;
-  sendAnswer: (content: string, questionId?: string) => void;
+  /** Send an answer. `displayContent` overrides what shows in chat (for structured selections). */
+  sendAnswer: (content: string, questionId?: string, displayContent?: string) => void;
   connect: () => void;
   disconnect: () => void;
 }
@@ -84,6 +87,8 @@ export function useConversation(
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const attemptsRef = useRef(0);
   const maxAttempts = 3;
+  // Bumped to force the main effect to re-run (for manual reconnect).
+  const [connectEpoch, setConnectEpoch] = useState(0);
   // Track the conversation the WS is *actually* connected to so the
   // effect can detect when the id truly changes vs. a mere re-render.
   const connectedIdRef = useRef<string | null>(null);
@@ -150,18 +155,33 @@ export function useConversation(
     const openSocket = () => {
       intentionalCloseRef.current = false;
 
+      // Clear existing messages before the server replays history.
+      // This prevents duplicates when the browser kills the WS on tab-switch
+      // and we reconnect and receive the full replay again.
+      setMessages([]);
+
       const wsBase = getWsUrl();
       const url = `${wsBase}/api/conversations/${conversationId}/ws`;
       const ws = new WebSocket(url);
       wsRef.current = ws;
       connectedIdRef.current = conversationId;
 
+      // Keep-alive: send a lightweight ping every 25 s so the browser
+      // doesn't kill the socket when the tab is backgrounded.
+      let pingInterval: ReturnType<typeof setInterval> | null = null;
+
       ws.onopen = () => {
         setIsConnected(true);
         attemptsRef.current = 0;
+        pingInterval = setInterval(() => {
+          if (ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: 'ping' }));
+          }
+        }, 25_000);
       };
 
       ws.onclose = () => {
+        if (pingInterval) clearInterval(pingInterval);
         setIsConnected(false);
         // Only reconnect if we didn't intentionally close
         if (
@@ -244,9 +264,9 @@ export function useConversation(
       teardown();
     };
     // `teardown` is stable (useCallback with []).
-    // We intentionally only re-run when conversationId changes.
+    // Re-run when conversationId changes OR when manual connect() bumps the epoch.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [conversationId]);
+  }, [conversationId, connectEpoch]);
 
   // ── send helpers ────────────────────────────────────────────────
 
@@ -266,61 +286,35 @@ export function useConversation(
     }
   }, []);
 
-  const sendAnswer = useCallback((content: string, questionId?: string) => {
+  const sendAnswer = useCallback((content: string, questionId?: string, displayContent?: string) => {
     const ws = wsRef.current;
     if (ws?.readyState === WebSocket.OPEN) {
+      // Always send the raw value to the server
       ws.send(JSON.stringify({ type: 'answer', content, questionId }));
-      const msg: ConversationMessage = {
-        id: `answer-${Date.now()}`,
-        type: 'answer',
-        sender: 'user',
-        content,
-        timestamp: new Date().toISOString(),
-      };
-      setMessages((prev) => [...prev, msg]);
+      // Show a friendly version in the chat (or nothing for silent selections)
+      const visibleContent = displayContent ?? content;
+      if (visibleContent) {
+        const msg: ConversationMessage = {
+          id: `answer-${Date.now()}`,
+          type: 'answer',
+          sender: 'user',
+          content: visibleContent,
+          timestamp: new Date().toISOString(),
+        };
+        setMessages((prev) => [...prev, msg]);
+      }
       setAwaitingInput(false);
     }
   }, []);
 
-  // Expose connect/disconnect for manual use (rare)
+  // Expose connect/disconnect for manual use (rare).
+  // Bumps the connectEpoch so the main effect re-runs and opens a fresh
+  // socket with all the proper handlers (ping, replay, etc.).
   const connect = useCallback(() => {
-    // Force reconnect by tearing down and letting the effect re-run
     connectedIdRef.current = null;
     teardown();
-    // The effect won't re-run automatically (conversationId didn't change),
-    // so we trigger via a state identity change indirectly — or just open
-    // directly here.
-    if (conversationId) {
-      attemptsRef.current = 0;
-      intentionalCloseRef.current = false;
-      const wsBase = getWsUrl();
-      const url = `${wsBase}/api/conversations/${conversationId}/ws`;
-      const ws = new WebSocket(url);
-      wsRef.current = ws;
-      connectedIdRef.current = conversationId;
-      ws.onopen = () => {
-        setIsConnected(true);
-        attemptsRef.current = 0;
-      };
-      ws.onclose = () => setIsConnected(false);
-      ws.onerror = () => {};
-      ws.onmessage = (event) => {
-        try {
-          const data = JSON.parse(event.data) as ConversationMessage;
-          const msg: ConversationMessage = {
-            ...data,
-            id:
-              data.id ||
-              `${data.type}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-          };
-          setMessages((prev) => [...prev, msg]);
-          onMessageRef.current?.(msg);
-        } catch (err) {
-          console.error('Failed to parse WS message:', err);
-        }
-      };
-    }
-  }, [conversationId, teardown]);
+    setConnectEpoch((e) => e + 1);
+  }, [teardown]);
 
   return {
     messages,

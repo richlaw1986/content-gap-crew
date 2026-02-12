@@ -1,4 +1,9 @@
-"""Sitemap lookup and content audit tools — works with any website."""
+"""Sitemap lookup and content audit tools — works with any website.
+
+All tool functions are **synchronous** because CrewAI's ``crew.kickoff()``
+runs in a thread-pool (``run_in_executor``) with no event loop.  We use
+``httpx.Client`` (sync) instead of ``httpx.AsyncClient``.
+"""
 
 import re
 import xml.etree.ElementTree as ET
@@ -15,7 +20,7 @@ from crewai.tools import tool
 SITEMAP_NS = {"sm": "http://www.sitemaps.org/schemas/sitemap/0.9"}
 
 
-async def fetch_sitemap_urls(client: httpx.AsyncClient, sitemap_url: str) -> list[dict[str, Any]]:
+def fetch_sitemap_urls(client: httpx.Client, sitemap_url: str) -> list[dict[str, Any]]:
     """Fetch URLs from a sitemap, handling both index and regular sitemaps.
     
     Returns list of dicts with 'url' and optional 'lastmod' keys.
@@ -23,7 +28,7 @@ async def fetch_sitemap_urls(client: httpx.AsyncClient, sitemap_url: str) -> lis
     urls = []
     
     try:
-        response = await client.get(sitemap_url, timeout=30.0, follow_redirects=True)
+        response = client.get(sitemap_url, timeout=30.0, follow_redirects=True)
         if response.status_code != 200:
             return urls
             
@@ -37,7 +42,7 @@ async def fetch_sitemap_urls(client: httpx.AsyncClient, sitemap_url: str) -> lis
                 child_url = sitemap_loc.text
                 if child_url:
                     try:
-                        child_response = await client.get(child_url, timeout=30.0, follow_redirects=True)
+                        child_response = client.get(child_url, timeout=30.0, follow_redirects=True)
                         if child_response.status_code == 200:
                             child_root = ET.fromstring(child_response.content)
                             for url_elem in child_root.findall(".//sm:url", SITEMAP_NS):
@@ -67,13 +72,33 @@ async def fetch_sitemap_urls(client: httpx.AsyncClient, sitemap_url: str) -> lis
     return urls
 
 
+def _normalize_url(raw: str) -> str:
+    """Ensure a URL has a scheme so ``urlparse`` can split it correctly.
+
+    Handles bare domains like ``sanity.io`` or ``www.example.com`` which
+    ``urlparse`` misinterprets (puts the domain in ``path`` instead of
+    ``netloc``) when no scheme is present.
+    """
+    raw = raw.strip().rstrip("/")
+    if not raw:
+        return raw
+    # Already has a scheme
+    if raw.startswith("http://") or raw.startswith("https://"):
+        return raw
+    # Starts with // (protocol-relative)
+    if raw.startswith("//"):
+        return f"https:{raw}"
+    # Bare domain — add https://
+    return f"https://{raw}"
+
+
 def _derive_sitemap_urls(site_url: str) -> list[str]:
     """Given a website URL, derive common sitemap locations to try.
 
     If the URL already points to an XML file, return it as-is.
     Otherwise, return a list of common sitemap paths to probe.
     """
-    site_url = site_url.strip().rstrip("/")
+    site_url = _normalize_url(site_url)
 
     # If the user gave us an explicit sitemap URL, just use that
     if site_url.endswith(".xml") or "sitemap" in site_url.lower():
@@ -132,7 +157,7 @@ def categorize_url(url: str) -> str | None:
 
 
 @tool
-async def sitemap_lookup(site_url: str, query: str) -> str:
+def sitemap_lookup(site_url: str, query: str) -> str:
     """
     Look up a website's sitemap and search for content matching a query.
     Fetches the sitemap (handling indexes automatically), then performs
@@ -142,22 +167,24 @@ async def sitemap_lookup(site_url: str, query: str) -> str:
     recommending new content.
     
     Args:
-        site_url: The website URL or sitemap URL to scan.
-                  Examples: "https://www.sanity.io", "https://example.com/sitemap.xml"
+        site_url: The website URL or sitemap URL to scan.  Bare domains are
+                  accepted (e.g. "sanity.io") — https:// is added automatically.
+                  Examples: "sanity.io", "https://www.sanity.io", "https://example.com/sitemap.xml"
         query: Search term to look for in the sitemap URLs.
         
     Returns:
         Analysis of sitemap coverage for the query.
     """
+    site_url = _normalize_url(site_url)
     sitemap_candidates = _derive_sitemap_urls(site_url)
 
-    async with httpx.AsyncClient() as client:
+    with httpx.Client() as client:
         # Fetch all URLs from discovered sitemaps
         all_urls: list[dict[str, Any]] = []
         sitemaps_found = 0
         
         for sitemap_url in sitemap_candidates:
-            urls = await fetch_sitemap_urls(client, sitemap_url)
+            urls = fetch_sitemap_urls(client, sitemap_url)
             if urls:
                 sitemaps_found += 1
                 all_urls.extend(urls)
@@ -273,30 +300,32 @@ EXACT MATCHES ({len(exact_matches)}):
 
 
 @tool
-async def content_audit(site_url: str, query: str = "") -> str:
+def content_audit(site_url: str, query: str = "") -> str:
     """
     Perform a content audit on any website by scanning its sitemap.
     Categorises URLs by content type and freshness (based on lastmod dates).
     Optionally filters to URLs matching a query.
 
     Args:
-        site_url: The website URL or sitemap URL to audit.
-                  Examples: "https://www.sanity.io", "https://example.com/sitemap.xml"
+        site_url: The website URL or sitemap URL to audit.  Bare domains are
+                  accepted (e.g. "strapi.io") — https:// is added automatically.
+                  Examples: "strapi.io", "https://www.sanity.io", "https://example.com/sitemap.xml"
         query: Optional filter — only show URLs containing this term.
                Leave empty for a full inventory.
 
     Returns:
         Categorized URL inventory with freshness indicators.
     """
+    site_url = _normalize_url(site_url)
     sitemap_candidates = _derive_sitemap_urls(site_url)
 
-    async with httpx.AsyncClient() as client:
+    with httpx.Client() as client:
         # Fetch URLs from sitemaps
         all_urls: list[dict[str, Any]] = []
         sitemaps_found = 0
         
         for sitemap_url in sitemap_candidates:
-            urls = await fetch_sitemap_urls(client, sitemap_url)
+            urls = fetch_sitemap_urls(client, sitemap_url)
             if urls:
                 sitemaps_found += 1
                 all_urls.extend(urls)

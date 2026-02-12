@@ -74,14 +74,22 @@ export default function DashboardPage() {
   }, []);
 
   const handleDeleteConversation = useCallback(
-    (id: string) => {
-      // Remove from local list (could also delete from Sanity)
+    async (id: string) => {
+      // Optimistically remove from local state
       setConversations((prev) => prev.filter((c) => c.id !== id));
       if (activeConvId === id) {
         setActiveConvId(null);
       }
+      // Delete from Sanity (conversation + associated runs)
+      try {
+        await api.conversations.delete(id);
+      } catch (err) {
+        console.error('Failed to delete conversation:', err);
+        showError('Error', 'Could not delete the conversation.');
+        fetchConversations(); // re-fetch to restore the list
+      }
     },
-    [activeConvId],
+    [activeConvId, fetchConversations, showError],
   );
 
   const handleSendMessage = useCallback(
@@ -107,8 +115,8 @@ export default function DashboardPage() {
   );
 
   const handleSendAnswer = useCallback(
-    (content: string, questionId?: string) => {
-      sendAnswer(content, questionId);
+    (content: string, questionId?: string, displayContent?: string) => {
+      sendAnswer(content, questionId, displayContent);
     },
     [sendAnswer],
   );

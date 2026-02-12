@@ -95,7 +95,9 @@ class SanityClient:
     # ── Crew / Agent queries ──────────────────────────────
 
     async def list_crews(self) -> list[dict[str, Any]]:
-        query = """*[_type == "crew" && enabled == true] {
+        # enabled != false: include crews that are explicitly enabled or
+        # that don't have the field set at all (schema default is true).
+        query = """*[_type == "crew" && enabled != false] {
             _id,
             name,
             displayName,
@@ -107,7 +109,7 @@ class SanityClient:
 
     async def list_all_skills(self) -> list[dict[str, Any]]:
         """Return all enabled skills (no search filter)."""
-        query = """*[_type == "skill" && enabled == true] | order(_updatedAt desc) {
+        query = """*[_type == "skill" && enabled != false] | order(_updatedAt desc) {
             _id, name, description, steps, tags, toolsRequired, inputSchema, outputSchema
         }"""
         return await self._query(query) or []
@@ -135,6 +137,14 @@ class SanityClient:
             outputStyle,
             backstory,
             llmModel,
+            knowledgeDocuments[] {
+                title,
+                description,
+                extractedSummary,
+                "assetUrl": asset->url,
+                "assetRef": asset._ref,
+                "originalFilename": asset->originalFilename
+            },
             tools[]->{
                 _id,
                 name,
@@ -153,6 +163,12 @@ class SanityClient:
             _id, name, role, goal,
             expertise, philosophy, thingsToAvoid, usefulUrls, outputStyle,
             backstory, llmModel,
+            knowledgeDocuments[] {
+                title, description, extractedSummary,
+                "assetUrl": asset->url,
+                "assetRef": asset._ref,
+                "originalFilename": asset->originalFilename
+            },
             tools[]->{
                 _id, name, displayName, description,
                 implementationType, credentialTypes, parameters, httpConfig
@@ -168,6 +184,12 @@ class SanityClient:
                 _id, name, role, goal,
                 expertise, philosophy, thingsToAvoid, usefulUrls, outputStyle,
                 backstory, llmModel,
+                knowledgeDocuments[] {
+                    title, description, extractedSummary,
+                    "assetUrl": asset->url,
+                    "assetRef": asset._ref,
+                    "originalFilename": asset->originalFilename
+                },
                 tools[]->{
                     _id, name, displayName, description,
                     implementationType, credentialTypes, parameters, httpConfig
@@ -447,6 +469,33 @@ class SanityClient:
         except Exception as e:
             logger.warning(f"Failed to add run {run_id} to conversation {conv_id}: {e}")
 
+    async def delete_conversation(self, conv_id: str) -> None:
+        """Delete a conversation and its associated run documents from Sanity."""
+        # First, fetch the run references so we can delete them too
+        try:
+            conv = await self.get_conversation(conv_id)
+            run_refs: list[str] = []
+            if conv and conv.get("runs"):
+                for r in conv["runs"]:
+                    if isinstance(r, dict):
+                        run_refs.append(r.get("_ref") or r.get("_id", ""))
+                    elif isinstance(r, str):
+                        run_refs.append(r)
+
+            mutations: list[dict[str, Any]] = []
+            # Delete the conversation document
+            mutations.append({"delete": {"id": conv_id}})
+            # Delete associated run documents
+            for rid in run_refs:
+                if rid:
+                    mutations.append({"delete": {"id": rid}})
+
+            await self._mutate(mutations)
+            logger.info(f"Deleted conversation {conv_id} and {len(run_refs)} run(s)")
+        except Exception as e:
+            logger.warning(f"Failed to delete conversation {conv_id}: {e}")
+            raise
+
 
 class StubSanityClient:
     """Stub client for development without Sanity credentials."""
@@ -623,6 +672,14 @@ class StubSanityClient:
         if conv:
             conv.setdefault("runs", []).append(run_id)
             conv["activeRunId"] = run_id
+
+    async def delete_conversation(self, conv_id: str) -> None:
+        conv = self._conversations.pop(conv_id, None)
+        if conv:
+            for r in conv.get("runs", []):
+                rid = r if isinstance(r, str) else r.get("_ref") or r.get("_id", "")
+                self._runs.pop(rid, None)
+            logger.info(f"Stub: deleted conversation {conv_id}")
 
 
 def get_sanity_client() -> SanityClient | StubSanityClient:

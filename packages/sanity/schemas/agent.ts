@@ -107,6 +107,45 @@ export default defineType({
       description: 'Tone, format preferences, and length guidance (e.g., "Use tables for comparisons. Be concise. Cite data sources.")',
     }),
     defineField({
+      name: 'knowledgeDocuments',
+      title: 'Knowledge Documents',
+      type: 'array',
+      of: [
+        {
+          type: 'file',
+          options: {accept: '.pdf,.docx,.pptx,.txt,.md,.csv'},
+          fields: [
+            defineField({
+              name: 'title',
+              title: 'Title',
+              type: 'string',
+              description: 'Short label for this document (e.g. "Brand Guidelines 2026")',
+              validation: (Rule) => Rule.required(),
+            }),
+            defineField({
+              name: 'description',
+              title: 'Description',
+              type: 'string',
+              description: 'Brief note on what this document provides',
+            }),
+            defineField({
+              name: 'extractedSummary',
+              title: 'Extracted Summary',
+              type: 'text',
+              rows: 8,
+              description:
+                'Auto-generated text extraction / summary — this is what the agent actually reads. Edit to refine.',
+            }),
+          ],
+          preview: {
+            select: {title: 'title', subtitle: 'description'},
+          },
+        },
+      ],
+      description:
+        'Upload PDFs, docs, slides, or text files. Extracted summaries are injected into the agent\'s context at runtime.',
+    }),
+    defineField({
       name: 'backstory',
       title: 'Backstory (legacy / override)',
       type: 'text',

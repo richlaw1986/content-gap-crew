@@ -82,12 +82,13 @@ async def _agent_reply(
 
         system = (
             f"You are {name} ({role}). {backstory}\n\n"
-            "You are in a team chat with a user. Your team is currently working "
-            "on a task in the background. The user has just sent a quick message.\n\n"
+            "You are in a team chat with a user. You and your team have been working "
+            "together on tasks in this conversation. The user has just sent a message.\n\n"
             "CRITICAL RULES FOR THIS REPLY:\n"
             "- This is a CHAT MESSAGE, not a task. Keep it SHORT — 2-4 sentences max.\n"
-            "- Acknowledge what they said and give a brief, helpful response.\n"
-            "- Do NOT write a full guide, tutorial, or report. The main task output will handle that.\n"
+            "- If the user asks about previous work, answer from the conversation context.\n"
+            "- If the user asks a NEW question on a different topic, answer it directly and helpfully.\n"
+            "- Do NOT write a full guide, tutorial, or report.\n"
             "- Do NOT ask follow-up questions unless absolutely essential.\n"
             "- Think of this like a quick Slack reply, not a document."
         )
@@ -230,6 +231,17 @@ async def get_conversation(conversation_id: str, request: Request) -> dict[str, 
     return conv
 
 
+@router.delete("/{conversation_id}")
+async def delete_conversation(conversation_id: str, request: Request) -> dict[str, Any]:
+    """Delete a conversation and its associated runs from Sanity."""
+    sanity = request.app.state.sanity
+    try:
+        await sanity.delete_conversation(conversation_id)
+        return {"deleted": True, "id": conversation_id}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to delete conversation: {exc}")
+
+
 # ── WebSocket endpoint ─────────────────────────────────────────
 
 # Event types that are live-only (streamed via WS but not persisted / replayed).
@@ -285,20 +297,33 @@ async def conversation_ws(websocket: WebSocket, conversation_id: str):
             ws_type = msg_type
 
         try:
-            await websocket.send_json({
+            replay_msg: dict[str, Any] = {
                 "type": ws_type,
                 "sender": sender,
                 "content": content,
                 "timestamp": m.get("timestamp", _now()),
                 "replayed": True,
-            })
+            }
+            # Forward metadata flags so the frontend can render faithfully.
+            meta = m.get("metadata") or {}
+            if meta.get("isReply"):
+                replay_msg["isReply"] = True
+            # For question messages, forward stored options/selectionType
+            # so the frontend knows this was a selection question (now read-only).
+            if ws_type == "question":
+                if meta.get("options"):
+                    replay_msg["options"] = meta["options"]
+                if meta.get("selectionType"):
+                    replay_msg["selectionType"] = meta["selectionType"]
+            await websocket.send_json(replay_msg)
         except Exception:
             break  # client disconnected during replay
 
     # Per-connection state
     pending_questions: dict[str, asyncio.Future] = {}  # questionId → Future[str]
     run_task: asyncio.Task | None = None
-    lead_agent_config: dict[str, Any] | None = None  # first agent in the active crew
+    lead_agent_config: dict[str, Any] | None = None  # default agent for replies
+    active_crew_agents: list[dict[str, Any]] = []      # all agents in the current crew
 
     async def send(msg: dict):
         """Send a JSON message to the client, ignoring errors if closed."""
@@ -331,6 +356,37 @@ async def conversation_ws(websocket: WebSocket, conversation_id: str):
             if n in ll or ll in n:
                 return True
         return False
+
+    def _find_mentioned_agent(message: str) -> dict[str, Any] | None:
+        """Detect if the user is addressing a specific agent by name/role.
+
+        Scans the message for agent names and roles (case-insensitive,
+        partial matches allowed).  Returns the best-matching agent config
+        from ``active_crew_agents``, or ``None`` if nobody is mentioned.
+
+        Examples that match "SEO Specialist":
+          - "SEO specialist, can you ..."
+          - "Hey seo specialist ..."
+          - "Can the SEO Specialist try again?"
+        """
+        if not active_crew_agents:
+            return None
+
+        msg_lower = message.lower()
+        best: dict[str, Any] | None = None
+        best_len = 0  # prefer longer name matches (more specific)
+
+        for agent_cfg in active_crew_agents:
+            for key in ("name", "role"):
+                candidate = (agent_cfg.get(key) or "").strip()
+                if not candidate or len(candidate) < 3:
+                    continue
+                if candidate.lower() in msg_lower:
+                    if len(candidate) > best_len:
+                        best = agent_cfg
+                        best_len = len(candidate)
+
+        return best
 
     async def _build_conversation_context() -> str:
         """Build context for continuity across runs.
@@ -427,13 +483,21 @@ async def conversation_ws(websocket: WebSocket, conversation_id: str):
             **extra,
         }
         await send(msg)
-        await sanity.append_message(conversation_id, {
+        # Persist to Sanity — stash options/selectionType in metadata
+        # so replayed questions can render faithfully.
+        persist_msg: dict[str, Any] = {
             "_key": _msg_key(),
             "sender": "system",
             "type": "question",
             "content": content,
             "timestamp": _now(),
-        })
+        }
+        if extra.get("options") or extra.get("selectionType"):
+            persist_msg["metadata"] = {
+                k: v for k, v in extra.items()
+                if k in ("options", "selectionType")
+            }
+        await sanity.append_message(conversation_id, persist_msg)
         await sanity.update_conversation_status(conversation_id, "awaiting_input")
 
         future: asyncio.Future[str] = asyncio.get_event_loop().create_future()
@@ -487,6 +551,19 @@ async def conversation_ws(websocket: WebSocket, conversation_id: str):
         # or let the planner decide.  Skip if no crews exist.
         available_crews = await sanity.list_crews()
         selected_crew_id: str | None = None  # None = planner decides
+
+        # Deduplicate crews by displayName/name so the user never sees
+        # the same crew listed twice (can happen if a duplicate document
+        # exists in the Sanity dataset).
+        if available_crews:
+            seen_labels: set[str] = set()
+            deduped_crews: list[dict[str, Any]] = []
+            for c in available_crews:
+                label = (c.get("displayName") or c["name"]).strip().lower()
+                if label not in seen_labels:
+                    seen_labels.add(label)
+                    deduped_crews.append(c)
+            available_crews = deduped_crews
 
         if available_crews:
             crew_options = [
@@ -576,6 +653,57 @@ async def conversation_ws(websocket: WebSocket, conversation_id: str):
                     picked_ids.discard("__none__")
                     selected_skills = [s for s in merged_skills if s["_id"] in picked_ids]
 
+        # ── Step 3: Collect required skill inputs ─────────────
+        # If any selected skill defines required inputSchema fields,
+        # ask the user for them before proceeding to the planner.
+        if selected_skills:
+            missing_fields: list[dict[str, Any]] = []
+            for sk in selected_skills:
+                for field in sk.get("inputSchema") or []:
+                    fname = field.get("name", "")
+                    if not fname:
+                        continue
+                    # Skip if the user already provided this value
+                    if fname in user_inputs and user_inputs[fname]:
+                        continue
+                    is_required = field.get("required", False)
+                    # Ask for all required fields and any optional field that
+                    # would meaningfully improve the output.
+                    if is_required:
+                        missing_fields.append(field)
+
+            if missing_fields:
+                # Build a human-readable question from the schema fields
+                field_questions = []
+                for f in missing_fields:
+                    label = f.get("label") or f.get("name", "Input")
+                    help_text = f.get("helpText") or f.get("placeholder") or ""
+                    q = label
+                    if help_text:
+                        q += f" ({help_text})"
+                    field_questions.append(q)
+
+                prompt = "Before we start, I need a few details:\n- " + "\n- ".join(field_questions)
+                try:
+                    inputs_answer = await _ask_user(prompt)
+                except asyncio.TimeoutError:
+                    return
+
+                # Store the answer(s) — for a single field, assign directly;
+                # for multiple, include as clarification context.
+                if len(missing_fields) == 1:
+                    user_inputs[missing_fields[0]["name"]] = inputs_answer.strip()
+                    enriched_objective = (
+                        f"{enriched_objective}\n\n"
+                        f"{missing_fields[0].get('label', 'Input')}: {inputs_answer.strip()}"
+                    )
+                else:
+                    user_inputs["skill_inputs"] = inputs_answer.strip()
+                    enriched_objective = (
+                        f"{enriched_objective}\n\n"
+                        f"User provided details:\n{inputs_answer.strip()}"
+                    )
+
         # ── Inject skill context into objective ───────────────
         if selected_skills:
             skill_block = "\n\nSKILL PLAYBOOKS TO FOLLOW:\n"
@@ -661,9 +789,19 @@ async def conversation_ws(websocket: WebSocket, conversation_id: str):
             planned_agents = [Agent(**a) for a in agents]
             resolved_ids = {a.get("_id") for a in agents}
 
-        # Store the lead agent config so mid-run messages can go through them
-        nonlocal lead_agent_config
-        lead_raw = next((a for a in agents if a.get("_id") in resolved_ids), None)
+        # Store all active crew agent configs (for @mention routing) and
+        # pick a default lead (first task's agent).
+        nonlocal lead_agent_config, active_crew_agents
+        active_crew_agents = [a for a in agents if a.get("_id") in resolved_ids]
+
+        lead_raw = None
+        if plan.tasks:
+            sorted_tasks = sorted(plan.tasks, key=lambda t: t.order)
+            first_agent_id = _resolve(sorted_tasks[0].agent_id)
+            if first_agent_id:
+                lead_raw = next((a for a in agents if a.get("_id") == first_agent_id), None)
+        if not lead_raw:
+            lead_raw = next((a for a in agents if a.get("_id") in resolved_ids), None)
         if lead_raw:
             lead_agent_config = lead_raw
 
@@ -892,6 +1030,11 @@ async def conversation_ws(websocket: WebSocket, conversation_id: str):
                 continue
 
             msg_type = data.get("type")
+
+            # Keep-alive ping from the frontend — just ignore it.
+            if msg_type == "ping":
+                continue
+
             content = data.get("content", "").strip()
 
             if (msg_type in ("user_message", "answer")) and content:
@@ -927,18 +1070,21 @@ async def conversation_ws(websocket: WebSocket, conversation_id: str):
                             if not future.done():
                                 future.set_result(content)
                 elif run_task and not run_task.done():
-                    # Run in progress — have the lead agent reply directly.
-                    # The user message is already persisted above.
-                    if lead_agent_config:
+                    # Run in progress — reply as the mentioned agent
+                    # (or fall back to the lead agent).
+                    mentioned = _find_mentioned_agent(content)
+                    responder = mentioned or lead_agent_config
+                    if responder:
                         conv_snapshot = await sanity.get_conversation(conversation_id)
                         recent = (conv_snapshot or {}).get("messages", [])[-12:]
                         agent_name, reply_text = await _agent_reply(
-                            lead_agent_config, content, recent,
+                            responder, content, recent,
                         )
                         await send({
                             "type": "agent_message",
                             "sender": agent_name,
                             "content": reply_text,
+                            "isReply": True,
                             "timestamp": _now(),
                         })
                         await sanity.append_message(conversation_id, {
@@ -946,10 +1092,36 @@ async def conversation_ws(websocket: WebSocket, conversation_id: str):
                             "sender": agent_name,
                             "type": "message",
                             "content": reply_text,
+                            "metadata": {"isReply": True},
                             "timestamp": _now(),
                         })
+                elif lead_agent_config:
+                    # Previous run completed — reply as the mentioned agent
+                    # or fall back to the lead.
+                    mentioned = _find_mentioned_agent(content)
+                    responder = mentioned or lead_agent_config
+                    conv_snapshot = await sanity.get_conversation(conversation_id)
+                    recent = (conv_snapshot or {}).get("messages", [])[-12:]
+                    agent_name, reply_text = await _agent_reply(
+                        responder, content, recent,
+                    )
+                    await send({
+                        "type": "agent_message",
+                        "sender": agent_name,
+                        "content": reply_text,
+                        "isReply": True,
+                        "timestamp": _now(),
+                    })
+                    await sanity.append_message(conversation_id, {
+                        "_key": _msg_key(),
+                        "sender": agent_name,
+                        "type": "message",
+                        "content": reply_text,
+                        "metadata": {"isReply": True},
+                        "timestamp": _now(),
+                    })
                 else:
-                    # No run active — kick one off
+                    # First message in conversation — kick off a new run
                     run_task = asyncio.create_task(
                         _run_crew(content, {"objective": content, "topic": content})
                     )

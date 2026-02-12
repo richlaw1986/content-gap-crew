@@ -36,6 +36,29 @@ class Tool(BaseModel):
         return data
 
 
+class KnowledgeDocument(BaseModel):
+    """An uploaded document attached to an agent for context enrichment."""
+    title: str = ""
+    description: str = ""
+    extracted_summary: str = Field(alias="extractedSummary", default="")
+    # Sanity file asset reference — used to download for extraction
+    asset_url: str | None = Field(alias="assetUrl", default=None)
+    asset_ref: str | None = Field(alias="assetRef", default=None)
+    original_filename: str | None = Field(alias="originalFilename", default=None)
+
+    class Config:
+        populate_by_name = True
+
+    @model_validator(mode="before")
+    @classmethod
+    def _coerce_nulls(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            for key in ("title", "description", "extractedSummary"):
+                if data.get(key) is None:
+                    data[key] = ""
+        return data
+
+
 class Agent(BaseModel):
     """Agent document from Sanity."""
     id: str = Field(alias="_id")
@@ -48,6 +71,10 @@ class Agent(BaseModel):
     things_to_avoid: list[str] = Field(alias="thingsToAvoid", default_factory=list)
     useful_urls: list[dict[str, str]] = Field(alias="usefulUrls", default_factory=list)
     output_style: str = Field(alias="outputStyle", default="")
+    # Knowledge documents — pre-extracted summaries injected into backstory
+    knowledge_documents: list[KnowledgeDocument] = Field(
+        alias="knowledgeDocuments", default_factory=list
+    )
     # Legacy / freeform override — appended after structured fields
     backstory: str = ""
     tools: list[Tool] = Field(default_factory=list)
@@ -66,12 +93,23 @@ class Agent(BaseModel):
     def _coerce_agent_nulls(cls, data: Any) -> Any:
         """Sanity returns null for missing/empty fields — coerce to safe defaults."""
         if isinstance(data, dict):
-            for key in ("thingsToAvoid", "usefulUrls"):
+            for key in ("thingsToAvoid", "usefulUrls", "knowledgeDocuments"):
                 if data.get(key) is None:
                     data[key] = []
             for key in ("expertise", "philosophy", "outputStyle", "backstory"):
                 if data.get(key) is None:
                     data[key] = ""
+            # Filter null entries from tools — Sanity returns null for
+            # broken/unresolved references in the tools[]-> join.
+            if "tools" in data and isinstance(data["tools"], list):
+                data["tools"] = [t for t in data["tools"] if t is not None]
+            elif data.get("tools") is None:
+                data["tools"] = []
+            # Filter null entries from knowledgeDocuments
+            if "knowledgeDocuments" in data and isinstance(data["knowledgeDocuments"], list):
+                data["knowledgeDocuments"] = [
+                    d for d in data["knowledgeDocuments"] if d is not None
+                ]
         return data
 
 
