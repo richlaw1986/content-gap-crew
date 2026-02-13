@@ -1,5 +1,5 @@
 import {useEffect, useMemo, useRef, useState} from 'react'
-import {Box, Button, Card, Flex, Stack, Text, TextInput} from '@sanity/ui'
+import {Box, Button, Flex, TextInput} from '@sanity/ui'
 import {MarkdownContent} from './MarkdownContent'
 import {parseArtifacts, type Artifact} from '../lib/parseArtifacts'
 import type {ConversationMessage, QuestionOption} from '../hooks/useStudioConversation'
@@ -27,8 +27,11 @@ const WELCOME_MESSAGE: ConversationMessage = {
 }
 
 // =============================================================================
-// Agent colour palette
+// Design tokens — shared across all message types for consistency
 // =============================================================================
+
+const RADIUS = 16 // rounded-2xl everywhere
+const CARD_PADDING = '12px 16px' // px-4 py-3
 
 const AGENT_COLORS: Record<string, string> = {
   planner: '#6366f1',
@@ -85,7 +88,7 @@ function CollapsibleAgentWork({
   const [open, setOpen] = useState(false)
 
   return (
-    <div style={{margin: '4px 0'}}>
+    <div style={{margin: '2px 0'}}>
       <button
         onClick={() => setOpen(!open)}
         style={{
@@ -95,8 +98,8 @@ function CollapsibleAgentWork({
           display: 'flex',
           alignItems: 'center',
           gap: 8,
-          padding: '4px 0',
-          fontSize: '0.75rem',
+          padding: '6px 0',
+          fontSize: '0.8125rem',
           color: 'var(--card-muted-fg-color, #71717a)',
           width: '100%',
           textAlign: 'left',
@@ -126,7 +129,7 @@ function CollapsibleAgentWork({
             marginTop: 4,
             marginBottom: 8,
             paddingLeft: 12,
-            borderLeft: '2px solid var(--card-border-color, #e4e4e7)',
+            borderLeft: '2px solid var(--card-border-color, rgba(255,255,255,0.1))',
           }}
         >
           <MarkdownContent content={content} />
@@ -137,7 +140,7 @@ function CollapsibleAgentWork({
 }
 
 // =============================================================================
-// Artifact card (file output)
+// Artifact card (file output) — only element that keeps a visible border
 // =============================================================================
 
 function ArtifactCard({artifact}: {artifact: Artifact}) {
@@ -155,34 +158,57 @@ function ArtifactCard({artifact}: {artifact: Artifact}) {
   }
 
   return (
-    <Card border radius={2} overflow="hidden" tone="transparent">
-      <Flex
-        align="center"
-        justify="space-between"
-        padding={3}
-        style={{borderBottom: '1px solid var(--card-border-color)'}}
+    <div
+      style={{
+        borderRadius: 12,
+        overflow: 'hidden',
+        border: '1px solid var(--card-border-color, rgba(255,255,255,0.1))',
+        background: 'var(--card-bg-color, rgba(255,255,255,0.03))',
+      }}
+    >
+      {/* File header */}
+      <div
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          padding: '8px 12px',
+          borderBottom: '1px solid var(--card-border-color, rgba(255,255,255,0.1))',
+        }}
       >
-        <Flex align="center" gap={2}>
-          <Text size={0} muted>
-            📄
-          </Text>
-          <Text size={1} weight="medium">
+        <div style={{display: 'flex', alignItems: 'center', gap: 8}}>
+          <span style={{fontSize: '0.75rem', opacity: 0.5}}>📄</span>
+          <span style={{fontSize: '0.75rem', fontWeight: 600}}>
             {artifact.filename}
-          </Text>
-          <Text size={0} muted style={{textTransform: 'uppercase', letterSpacing: '0.05em'}}>
+          </span>
+          <span
+            style={{
+              fontSize: '0.625rem',
+              opacity: 0.5,
+              textTransform: 'uppercase',
+              letterSpacing: '0.05em',
+            }}
+          >
             {artifact.language}
-          </Text>
-        </Flex>
-        <Button
-          mode="bleed"
-          tone="default"
-          fontSize={0}
-          padding={2}
-          text={copied ? '✓ Copied' : 'Copy'}
+          </span>
+        </div>
+        <button
           onClick={handleCopy}
-        />
-      </Flex>
-      <Box padding={4} style={{maxHeight: 384, overflow: 'auto'}}>
+          style={{
+            background: 'none',
+            border: 'none',
+            cursor: 'pointer',
+            fontSize: '0.75rem',
+            color: 'var(--card-muted-fg-color, #71717a)',
+            padding: '2px 8px',
+            borderRadius: 4,
+          }}
+        >
+          {copied ? '✓ Copied' : 'Copy'}
+        </button>
+      </div>
+      {/* File content */}
+      <div style={{padding: 16, maxHeight: 384, overflow: 'auto'}}>
         {isCode ? (
           <pre
             style={{
@@ -199,8 +225,8 @@ function ArtifactCard({artifact}: {artifact: Artifact}) {
         ) : (
           <MarkdownContent content={artifact.content} />
         )}
-      </Box>
-    </Card>
+      </div>
+    </div>
   )
 }
 
@@ -248,110 +274,136 @@ function SelectionQuestion({
   }
 
   return (
-    <div style={{margin: '12px 0', maxWidth: 672, marginRight: 48}}>
+    <div style={{marginTop: 12, marginBottom: 12, maxWidth: 672, marginRight: 48}}>
+      {/* Sender label */}
       <div
         style={{
           display: 'flex',
           alignItems: 'center',
           gap: 6,
-          marginBottom: 4,
+          marginBottom: 6,
           marginLeft: 4,
+          fontSize: '0.75rem',
         }}
       >
-        <span style={{fontSize: '0.75rem', color: '#6366f1'}}>❓</span>
-        <span style={{fontSize: '0.75rem', fontWeight: 600, color: '#6366f1'}}>{msg.sender}</span>
+        <span style={{color: '#818cf8'}}>❓</span>
+        <span style={{fontWeight: 600, color: '#818cf8'}}>{msg.sender}</span>
       </div>
-      <Card padding={4} radius={2} tone="caution">
-        <Text size={1} weight="medium">
-          {msg.content}
-        </Text>
-        <Stack space={2} marginTop={4}>
+
+      {/* Question card — subtle tinted background, no border */}
+      <div
+        style={{
+          borderRadius: RADIUS,
+          padding: '16px 20px',
+          fontSize: '0.875rem',
+          lineHeight: 1.6,
+          background: 'rgba(255,255,255,0.04)',
+        }}
+      >
+        <p style={{margin: 0, marginBottom: 16, fontWeight: 600}}>{msg.content}</p>
+
+        {/* Options */}
+        <div style={{display: 'flex', flexDirection: 'column', gap: 10}}>
           {options.map((opt) => {
             const isSelected = selected.has(opt.value)
             return (
-              <Card
+              <button
                 key={opt.value}
-                as="button"
-                padding={3}
-                radius={2}
-                border
-                tone={isSelected ? 'primary' : 'default'}
+                onClick={() => toggle(opt.value)}
+                disabled={submitted}
                 style={{
+                  display: 'flex',
+                  alignItems: 'flex-start',
+                  gap: 12,
+                  width: '100%',
+                  textAlign: 'left',
+                  padding: '12px 14px',
+                  borderRadius: 12,
+                  border: `1px solid ${isSelected ? '#818cf8' : 'rgba(255,255,255,0.08)'}`,
+                  background: isSelected ? 'rgba(99,102,241,0.12)' : 'rgba(255,255,255,0.03)',
                   cursor: submitted ? 'default' : 'pointer',
                   opacity: submitted ? 0.7 : 1,
-                  textAlign: 'left',
-                  width: '100%',
+                  transition: 'border-color 0.15s, background 0.15s',
+                  color: 'inherit',
+                  fontSize: '0.875rem',
+                  lineHeight: 1.5,
                 }}
-                onClick={() => toggle(opt.value)}
               >
-                <Flex align="flex-start" gap={3}>
-                  <span style={{marginTop: 2, flexShrink: 0}}>
-                    {isRadio ? (
-                      <span
-                        style={{
-                          display: 'inline-block',
-                          width: 16,
-                          height: 16,
-                          borderRadius: '50%',
-                          border: `2px solid ${isSelected ? '#6366f1' : '#a1a1aa'}`,
-                          background: isSelected ? '#6366f1' : 'transparent',
-                        }}
-                      />
-                    ) : (
-                      <span
-                        style={{
-                          display: 'inline-flex',
-                          alignItems: 'center',
-                          justifyContent: 'center',
-                          width: 16,
-                          height: 16,
-                          borderRadius: 3,
-                          border: `2px solid ${isSelected ? '#6366f1' : '#a1a1aa'}`,
-                          background: isSelected ? '#6366f1' : 'transparent',
-                          color: '#fff',
-                          fontSize: 10,
-                          fontWeight: 700,
-                        }}
-                      >
-                        {isSelected && '✓'}
-                      </span>
-                    )}
-                  </span>
-                  <div>
-                    <Text size={1} weight="medium">
-                      {opt.label}
-                    </Text>
-                    {opt.description && (
-                      <Text size={0} muted style={{marginTop: 2}}>
-                        {opt.description}
-                      </Text>
-                    )}
-                  </div>
-                </Flex>
-              </Card>
+                {/* Radio / Checkbox indicator */}
+                <span style={{marginTop: 2, flexShrink: 0}}>
+                  {isRadio ? (
+                    <span
+                      style={{
+                        display: 'inline-block',
+                        width: 18,
+                        height: 18,
+                        borderRadius: '50%',
+                        border: `2px solid ${isSelected ? '#818cf8' : '#71717a'}`,
+                        background: isSelected ? '#6366f1' : 'transparent',
+                        boxShadow: isSelected ? '0 0 0 2px rgba(99,102,241,0.2)' : 'none',
+                      }}
+                    />
+                  ) : (
+                    <span
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        width: 18,
+                        height: 18,
+                        borderRadius: 4,
+                        border: `2px solid ${isSelected ? '#818cf8' : '#71717a'}`,
+                        background: isSelected ? '#6366f1' : 'transparent',
+                        color: '#fff',
+                        fontSize: 11,
+                        fontWeight: 700,
+                      }}
+                    >
+                      {isSelected && '✓'}
+                    </span>
+                  )}
+                </span>
+                <div>
+                  <div style={{fontWeight: 600}}>{opt.label}</div>
+                  {opt.description && (
+                    <div style={{marginTop: 4, fontSize: '0.8125rem', opacity: 0.6}}>
+                      {opt.description}
+                    </div>
+                  )}
+                </div>
+              </button>
             )
           })}
-        </Stack>
+        </div>
+
+        {/* Submit button */}
         {!submitted && (
-          <div style={{marginTop: 12}}>
-            <Button
-              tone="primary"
-              text={
-                isRadio ? 'Continue' : `Apply${selected.size > 0 ? ` (${selected.size})` : ''}`
-              }
-              disabled={selected.size === 0}
+          <div style={{marginTop: 16}}>
+            <button
               onClick={handleSubmit}
-              fontSize={1}
-              padding={3}
-            />
+              disabled={selected.size === 0}
+              style={{
+                padding: '8px 20px',
+                borderRadius: 12,
+                border: 'none',
+                background: selected.size === 0 ? 'rgba(99,102,241,0.3)' : '#6366f1',
+                color: '#fff',
+                fontSize: '0.875rem',
+                fontWeight: 600,
+                cursor: selected.size === 0 ? 'not-allowed' : 'pointer',
+                transition: 'background 0.15s',
+              }}
+            >
+              {isRadio ? 'Continue' : `Apply${selected.size > 0 ? ` (${selected.size})` : ''}`}
+            </button>
           </div>
         )}
         {submitted && (
-          <Text size={0} muted style={{marginTop: 8, fontStyle: 'italic'}}>
+          <div style={{marginTop: 10, fontSize: '0.75rem', opacity: 0.5, fontStyle: 'italic'}}>
             ✓ Selection submitted
-          </Text>
+          </div>
         )}
-      </Card>
+      </div>
     </div>
   )
 }
@@ -400,7 +452,7 @@ function FinalOutput({output}: {output: string}) {
 
   if (hasFiles) {
     return (
-      <div style={{margin: '16px 0', maxWidth: 768, marginRight: 32}}>
+      <div style={{marginTop: 16, maxWidth: 768, marginRight: 32}}>
         <div
           style={{
             display: 'flex',
@@ -418,17 +470,17 @@ function FinalOutput({output}: {output: string}) {
             Final Output — {artifacts.length} file{artifacts.length !== 1 ? 's' : ''}
           </span>
         </div>
-        <Stack space={3}>
+        <div style={{display: 'flex', flexDirection: 'column', gap: 12}}>
           {artifacts.map((artifact, i) => (
             <ArtifactCard key={`${artifact.filename}-${i}`} artifact={artifact} />
           ))}
-        </Stack>
+        </div>
       </div>
     )
   }
 
   return (
-    <div style={{margin: '16px 0', maxWidth: 768, marginRight: 32}}>
+    <div style={{marginTop: 16, maxWidth: 768, marginRight: 32}}>
       <div
         style={{
           display: 'flex',
@@ -444,9 +496,17 @@ function FinalOutput({output}: {output: string}) {
         <span>✓</span>
         <span>Final Output</span>
       </div>
-      <Card padding={5} radius={2} tone="transparent" border>
+      <div
+        style={{
+          borderRadius: RADIUS,
+          padding: '16px 20px',
+          background: 'rgba(255,255,255,0.04)',
+          fontSize: '0.875rem',
+          lineHeight: 1.6,
+        }}
+      >
         <MarkdownContent content={output} />
-      </Card>
+      </div>
     </div>
   )
 }
@@ -504,7 +564,7 @@ export function ChatArea({
 
   return (
     <Flex direction="column" style={{height: '100%'}}>
-      {/* Messages — generous padding to match the Next.js layout */}
+      {/* Messages */}
       <div
         style={{
           flex: 1,
@@ -512,7 +572,7 @@ export function ChatArea({
           padding: '32px 24px',
         }}
       >
-        <div style={{display: 'flex', flexDirection: 'column', gap: 4}}>
+        <div style={{display: 'flex', flexDirection: 'column', gap: 2}}>
           {(() => {
             const visibleMessages = displayMessages.filter(shouldShow)
             return visibleMessages.map((msg, idx) => {
@@ -524,7 +584,7 @@ export function ChatArea({
               const isQuestion = msg.type === 'question'
               const color = getAgentColor(msg.sender)
 
-              // Collapsible intermediate work
+              // ── Collapsible intermediate work ──
               if (isCollapsible(msg, idx, visibleMessages)) {
                 return (
                   <CollapsibleAgentWork
@@ -537,7 +597,7 @@ export function ChatArea({
                 )
               }
 
-              // Thinking / status
+              // ── Thinking / status — inline event ──
               if (isThinking) {
                 return (
                   <div
@@ -546,7 +606,9 @@ export function ChatArea({
                       display: 'flex',
                       alignItems: 'center',
                       gap: 8,
-                      padding: '4px 0',
+                      padding: '6px 0',
+                      fontSize: '0.8125rem',
+                      color: 'var(--card-muted-fg-color, #71717a)',
                     }}
                   >
                     <span
@@ -556,95 +618,110 @@ export function ChatArea({
                         borderRadius: '50%',
                         background: '#38bdf8',
                         animation: 'pulse 2s infinite',
+                        flexShrink: 0,
                       }}
                     />
-                    <span style={{fontSize: '0.75rem', fontWeight: 600, color}}>{msg.sender}</span>
-                    <span
-                      style={{
-                        fontSize: '0.75rem',
-                        color: 'var(--card-muted-fg-color, #71717a)',
-                        opacity: 0.6,
-                      }}
-                    >
-                      {msg.content}
-                    </span>
+                    <span style={{fontWeight: 600, color, fontSize: '0.8125rem'}}>{msg.sender}</span>
+                    <span style={{opacity: 0.6}}>{msg.content}</span>
                   </div>
                 )
               }
 
-              // Tool call
+              // ── Tool call — inline event ──
               if (msg.type === 'tool_call') {
                 return (
                   <div
                     key={msg.id}
-                    style={{display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0'}}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 8,
+                      padding: '6px 0',
+                      fontSize: '0.8125rem',
+                      color: 'var(--card-muted-fg-color, #71717a)',
+                    }}
                   >
                     <span
-                      style={{width: 6, height: 6, borderRadius: '50%', background: '#fbbf24'}}
-                    />
-                    <span style={{fontSize: '0.75rem', fontWeight: 600, color}}>{msg.sender}</span>
-                    <span
                       style={{
-                        fontSize: '0.75rem',
-                        color: 'var(--card-muted-fg-color, #71717a)',
+                        width: 6,
+                        height: 6,
+                        borderRadius: '50%',
+                        background: '#fbbf24',
+                        flexShrink: 0,
                       }}
-                    >
-                      called
-                    </span>
-                    <span style={{fontSize: '0.75rem', fontFamily: 'monospace', color: '#d97706'}}>
+                    />
+                    <span style={{fontWeight: 600, color, fontSize: '0.8125rem'}}>{msg.sender}</span>
+                    <span style={{opacity: 0.6}}>called</span>
+                    <span style={{fontFamily: 'monospace', color: '#d97706'}}>
                       {msg.tool || 'tool'}
                     </span>
                   </div>
                 )
               }
 
-              // Tool result
+              // ── Tool result — inline event ──
               if (msg.type === 'tool_result') {
                 return (
                   <div
                     key={msg.id}
-                    style={{display: 'flex', alignItems: 'center', gap: 8, padding: '4px 0'}}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 8,
+                      padding: '6px 0',
+                      fontSize: '0.8125rem',
+                      color: 'var(--card-muted-fg-color, #71717a)',
+                    }}
                   >
                     <span
-                      style={{width: 6, height: 6, borderRadius: '50%', background: '#34d399'}}
-                    />
-                    <span style={{fontSize: '0.75rem', fontWeight: 600, color}}>{msg.sender}</span>
-                    <span
                       style={{
-                        fontSize: '0.75rem',
-                        color: 'var(--card-muted-fg-color, #71717a)',
+                        width: 6,
+                        height: 6,
+                        borderRadius: '50%',
+                        background: '#34d399',
+                        flexShrink: 0,
                       }}
-                    >
+                    />
+                    <span style={{fontWeight: 600, color, fontSize: '0.8125rem'}}>{msg.sender}</span>
+                    <span style={{opacity: 0.6}}>
                       ← {msg.tool || 'tool'}: {msg.content}
                     </span>
                   </div>
                 )
               }
 
-              // Final output
+              // ── Final output ──
               if (isComplete && msg.output) {
                 return <FinalOutput key={msg.id} output={msg.output} />
               }
 
-              // User messages — right-aligned with generous padding
+              // ── User messages — right-aligned rounded pill ──
               if (isUser) {
                 return (
-                  <div key={msg.id} style={{display: 'flex', justifyContent: 'flex-end', marginTop: 12}}>
-                    <Card
-                      padding={4}
-                      radius={3}
-                      tone="primary"
-                      style={{maxWidth: '70%', marginLeft: 48}}
+                  <div
+                    key={msg.id}
+                    style={{display: 'flex', justifyContent: 'flex-end', marginTop: 12, marginBottom: 12}}
+                  >
+                    <div
+                      style={{
+                        maxWidth: '70%',
+                        marginLeft: 48,
+                        borderRadius: `${RADIUS}px ${RADIUS}px 6px ${RADIUS}px`,
+                        padding: CARD_PADDING,
+                        fontSize: '0.875rem',
+                        lineHeight: 1.6,
+                        whiteSpace: 'pre-wrap',
+                        background: 'var(--card-badge-default-bg-color, rgba(99,102,241,0.15))',
+                        color: 'var(--card-fg-color, inherit)',
+                      }}
                     >
-                      <Text size={1} style={{whiteSpace: 'pre-wrap', lineHeight: 1.6}}>
-                        {msg.content}
-                      </Text>
-                    </Card>
+                      {msg.content}
+                    </div>
                   </div>
                 )
               }
 
-              // Questions
+              // ── Questions ──
               if (isQuestion) {
                 const nextMsg = visibleMessages[idx + 1]
                 const alreadyAnswered =
@@ -661,62 +738,139 @@ export function ChatArea({
                   )
                 }
 
+                // Read-only question (already answered or free-text)
                 return (
-                  <div key={msg.id} style={{marginTop: 12, maxWidth: 672, marginRight: 48}}>
+                  <div key={msg.id} style={{marginTop: 12, marginBottom: 12, maxWidth: 672, marginRight: 48}}>
                     <div
                       style={{
                         display: 'flex',
                         alignItems: 'center',
                         gap: 6,
-                        marginBottom: 4,
+                        marginBottom: 6,
                         marginLeft: 4,
                         fontSize: '0.75rem',
                       }}
                     >
-                      <span style={{color: '#6366f1'}}>❓</span>
-                      <span style={{fontWeight: 600, color: '#6366f1'}}>{msg.sender}</span>
+                      <span style={{color: '#818cf8'}}>❓</span>
+                      <span style={{fontWeight: 600, color: '#818cf8'}}>{msg.sender}</span>
                     </div>
-                    <Card padding={4} radius={2} tone="caution">
+                    <div
+                      style={{
+                        borderRadius: RADIUS,
+                        padding: CARD_PADDING,
+                        fontSize: '0.875rem',
+                        lineHeight: 1.6,
+                        background: 'rgba(255,255,255,0.04)',
+                      }}
+                    >
                       <MarkdownContent content={msg.content || ''} />
                       {alreadyAnswered && msg.options && (
-                        <Text size={0} muted style={{marginTop: 4, fontStyle: 'italic'}}>
+                        <div
+                          style={{
+                            marginTop: 6,
+                            fontSize: '0.75rem',
+                            opacity: 0.5,
+                            fontStyle: 'italic',
+                          }}
+                        >
                           ✓ Answered
-                        </Text>
+                        </div>
                       )}
-                    </Card>
+                    </div>
                   </div>
                 )
               }
 
-              // Errors
+              // ── Errors — subtle red tint, no heavy card ──
               if (isError) {
                 return (
-                  <div key={msg.id} style={{marginTop: 8, maxWidth: 672, marginRight: 48}}>
-                    <Card padding={4} radius={2} tone="critical">
-                      <Text size={1}>{msg.content || msg.message || 'An error occurred'}</Text>
-                    </Card>
+                  <div key={msg.id} style={{marginTop: 12, marginBottom: 12, maxWidth: 672, marginRight: 48}}>
+                    <div
+                      style={{
+                        borderRadius: RADIUS,
+                        padding: CARD_PADDING,
+                        fontSize: '0.875rem',
+                        lineHeight: 1.6,
+                        background: 'rgba(239,68,68,0.08)',
+                        color: '#fca5a5',
+                      }}
+                    >
+                      {msg.content || msg.message || 'An error occurred'}
+                    </div>
                   </div>
                 )
               }
 
-              // System messages
+              // ── System messages ──
               if (isSystem) {
+                const isWelcome = msg.id === '0'
+
+                // Welcome message — hero card with gradient
+                if (isWelcome) {
+                  return (
+                    <div
+                      key={msg.id}
+                      style={{
+                        marginTop: 24,
+                        marginBottom: 24,
+                        maxWidth: 600,
+                      }}
+                    >
+                      <div
+                        style={{
+                          borderRadius: RADIUS,
+                          padding: '28px 28px 24px',
+                          background: 'linear-gradient(135deg, rgba(99,102,241,0.12) 0%, rgba(139,92,246,0.08) 100%)',
+                          border: '1px solid rgba(99,102,241,0.15)',
+                        }}
+                      >
+                        <div
+                          style={{
+                            fontSize: '0.8125rem',
+                            fontWeight: 600,
+                            color: '#818cf8',
+                            marginBottom: 10,
+                            letterSpacing: '0.02em',
+                            textTransform: 'uppercase',
+                          }}
+                        >
+                          Agent Studio
+                        </div>
+                        <div
+                          style={{
+                            fontSize: '0.875rem',
+                            lineHeight: 1.6,
+                            color: 'var(--card-fg-color, #e4e4e7)',
+                          }}
+                        >
+                          Describe your goal to get started — agents will plan and coordinate in real time.
+                        </div>
+                      </div>
+                    </div>
+                  )
+                }
+
+                // Regular system messages — plain italic text
                 return (
-                  <div key={msg.id} style={{marginTop: 8, maxWidth: 672, marginRight: 48}}>
-                    <Text
-                      size={1}
-                      muted
-                      style={{fontStyle: 'italic', padding: '8px 0', lineHeight: 1.6}}
+                  <div key={msg.id} style={{marginTop: 12, marginBottom: 12, maxWidth: 672, marginRight: 48}}>
+                    <div
+                      style={{
+                        padding: '8px 0',
+                        fontSize: '0.875rem',
+                        lineHeight: 1.6,
+                        fontStyle: 'italic',
+                        color: 'var(--card-muted-fg-color, #a1a1aa)',
+                      }}
                     >
                       {msg.content}
-                    </Text>
+                    </div>
                   </div>
                 )
               }
 
-              // Agent messages (direct replies) — generous padding
+              // ── Agent messages (direct replies) — subtle background, no border ──
               return (
-                <div key={msg.id} style={{marginTop: 8, maxWidth: 672, marginRight: 48}}>
+                <div key={msg.id} style={{marginTop: 12, marginBottom: 12, maxWidth: 672, marginRight: 48}}>
                   <div
                     style={{
                       fontSize: '0.75rem',
@@ -728,9 +882,17 @@ export function ChatArea({
                   >
                     {msg.sender}
                   </div>
-                  <Card padding={4} radius={2} tone="transparent" border>
+                  <div
+                    style={{
+                      borderRadius: RADIUS,
+                      padding: '16px 20px',
+                      fontSize: '0.875rem',
+                      lineHeight: 1.6,
+                      background: 'rgba(255,255,255,0.04)',
+                    }}
+                  >
                     <MarkdownContent content={msg.content || ''} />
-                  </Card>
+                  </div>
                 </div>
               )
             })
@@ -758,7 +920,7 @@ export function ChatArea({
         </div>
       </div>
 
-      {/* Input — more spacious to match Next.js */}
+      {/* Input */}
       <div
         style={{
           padding: '8px 24px 24px',

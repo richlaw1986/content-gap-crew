@@ -7,7 +7,7 @@ export const chatTool = definePlugin({
   tools: [
     {
       name: 'chat',
-      title: 'Chat',
+      title: 'Agent Chat',
       component: ChatTool,
       icon: ChatIcon,
     },

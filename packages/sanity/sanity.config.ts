@@ -1,6 +1,5 @@
 import {defineConfig} from 'sanity'
 import {structureTool} from 'sanity/structure'
-import {visionTool} from '@sanity/vision'
 import {schemaTypes} from './schemas'
 import {chatTool} from 'sanity-plugin-chat'
 
@@ -13,8 +12,7 @@ export default defineConfig({
   dataset: process.env.SANITY_STUDIO_DATASET || 'production',
 
   plugins: [
-    structureTool(),
-    visionTool(),
+    structureTool({title: 'Agent Config'}),
     chatTool(),
   ],
 
