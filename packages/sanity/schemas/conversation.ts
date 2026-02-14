@@ -82,6 +82,25 @@ export default defineType({
               type: 'text',
             },
             {
+              name: 'attachments',
+              title: 'Attachments',
+              type: 'array',
+              description: 'Files attached to this message (uploaded to Sanity CDN)',
+              of: [
+                {
+                  type: 'object',
+                  name: 'attachment',
+                  fields: [
+                    {name: 'assetId', title: 'Asset ID', type: 'string'},
+                    {name: 'url', title: 'URL', type: 'url'},
+                    {name: 'filename', title: 'Filename', type: 'string'},
+                    {name: 'mimeType', title: 'MIME Type', type: 'string'},
+                    {name: 'size', title: 'Size (bytes)', type: 'number'},
+                  ],
+                },
+              ],
+            },
+            {
               name: 'metadata',
               title: 'Metadata',
               type: 'object',

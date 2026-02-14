@@ -4,7 +4,7 @@ import {defineType, defineField} from 'sanity'
  * Tool Schema
  *
  * Represents a tool that agents can use. Tools can be:
- * - **builtin**: Implemented in Python (the `name` field maps to a function in the backend registry)
+ * - **builtin**: Implemented in the backend (the `name` field maps to a function in the tool registry)
  * - **http**: A declarative HTTP API call — configured entirely from the Studio, no deploy needed
  *
  * MCP tools are discovered dynamically via `mcpServer` documents and don't appear here.
@@ -25,7 +25,7 @@ export default defineType({
       title: 'Name',
       type: 'string',
       group: 'basic',
-      description: 'Unique function name (snake_case). For builtin tools this must match the Python function.',
+      description: 'Unique function name (snake_case). For builtin tools this must match the backend tool registry.',
       validation: (Rule) =>
         Rule.required()
           .regex(/^[a-z][a-z0-9_]*$/, {name: 'snake_case', invert: false})
@@ -51,11 +51,11 @@ export default defineType({
       title: 'Implementation',
       type: 'string',
       group: 'basic',
-      description: 'How this tool runs. Builtin = Python code in the backend. HTTP = declarative API call configured below.',
+      description: 'How this tool runs. Built-in = code in the backend tool registry. HTTP = declarative API call configured below.',
       initialValue: 'builtin',
       options: {
         list: [
-          {title: 'Built-in (Python)', value: 'builtin'},
+          {title: 'Built-in', value: 'builtin'},
           {title: 'HTTP API Call', value: 'http'},
         ],
         layout: 'radio',

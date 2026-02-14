@@ -41,6 +41,29 @@ interface OutputItem {
   isCode: boolean;
 }
 
+// ── Agent pill color mapping — matches getAgentColor in ChatArea ──
+
+const AGENT_PILL_CLASSES: Record<string, { pill: string; dot: string }> = {
+  planner:   { pill: 'bg-indigo-50 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-300 border-indigo-200 dark:border-indigo-800', dot: 'bg-indigo-400' },
+  narrative: { pill: 'bg-violet-50 dark:bg-violet-900/30 text-violet-700 dark:text-violet-300 border-violet-200 dark:border-violet-800', dot: 'bg-violet-400' },
+  memory:    { pill: 'bg-violet-50 dark:bg-violet-900/30 text-violet-700 dark:text-violet-300 border-violet-200 dark:border-violet-800', dot: 'bg-violet-400' },
+  product:   { pill: 'bg-emerald-50 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800', dot: 'bg-emerald-400' },
+  data:      { pill: 'bg-sky-50 dark:bg-sky-900/30 text-sky-700 dark:text-sky-300 border-sky-200 dark:border-sky-800', dot: 'bg-sky-400' },
+  technical: { pill: 'bg-amber-50 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300 border-amber-200 dark:border-amber-800', dot: 'bg-amber-400' },
+  seo:       { pill: 'bg-amber-50 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300 border-amber-200 dark:border-amber-800', dot: 'bg-amber-400' },
+  quality:   { pill: 'bg-rose-50 dark:bg-rose-900/30 text-rose-700 dark:text-rose-300 border-rose-200 dark:border-rose-800', dot: 'bg-rose-400' },
+  review:    { pill: 'bg-rose-50 dark:bg-rose-900/30 text-rose-700 dark:text-rose-300 border-rose-200 dark:border-rose-800', dot: 'bg-rose-400' },
+};
+const DEFAULT_PILL_CLASSES = { pill: 'bg-sky-50 dark:bg-sky-900/30 text-sky-700 dark:text-sky-300 border-sky-200 dark:border-sky-800', dot: 'bg-sky-400' };
+
+function getAgentPillClasses(name: string) {
+  const lower = name?.toLowerCase() || '';
+  for (const [key, classes] of Object.entries(AGENT_PILL_CLASSES)) {
+    if (lower.includes(key)) return classes;
+  }
+  return DEFAULT_PILL_CLASSES;
+}
+
 // ── Component ──────────────────────────────────────────────────
 
 export function AgentActivityFeed({
@@ -169,15 +192,18 @@ export function AgentActivityFeed({
             <div>
               <p className="text-[10px] uppercase tracking-wider text-muted-foreground mb-1.5">Agents</p>
               <div className="flex flex-wrap gap-1.5">
-                {stats.agentNames.map((name) => (
-                  <span
-                    key={name}
-                    className="inline-flex items-center gap-1 px-2 py-0.5 bg-sky-50 dark:bg-sky-900/30 text-sky-700 dark:text-sky-300 text-xs rounded-full border border-sky-200 dark:border-sky-800"
-                  >
-                    <span className="w-1.5 h-1.5 rounded-full bg-sky-400" />
-                    {name}
-                  </span>
-                ))}
+                {stats.agentNames.map((name) => {
+                  const ac = getAgentPillClasses(name);
+                  return (
+                    <span
+                      key={name}
+                      className={`inline-flex items-center gap-1 px-2 py-0.5 text-xs rounded-full border ${ac.pill}`}
+                    >
+                      <span className={`w-1.5 h-1.5 rounded-full ${ac.dot}`} />
+                      {name}
+                    </span>
+                  );
+                })}
               </div>
             </div>
           )}

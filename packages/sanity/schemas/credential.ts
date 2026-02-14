@@ -1,13 +1,46 @@
 import {defineType, defineField} from 'sanity'
+import {SecretInput} from '../components/SecretInput'
+import {CredentialWarningBanner} from '../components/CredentialWarningBanner'
+
+// ── Sensitive field names that should be masked when storageMethod is "direct" ──
+// Non-sensitive fields (name, type, storageMethod, environment, notes,
+// sanityProjectId, sanityDataset, gscSiteUrl, redditUserAgent,
+// bigqueryCredentialsFile, gscKeyFile, googleAdsCustomerId, bigqueryTables)
+// are left as normal text inputs.
+
+/**
+ * Helper: define a string field that uses the SecretInput component
+ * (masked when storageMethod is "direct", normal when "env").
+ */
+function secretField(
+  name: string,
+  title: string,
+  options: {
+    description?: string
+    hidden?: (ctx: {document?: any}) => boolean
+  } = {},
+) {
+  return defineField({
+    name,
+    title,
+    type: 'string',
+    description: options.description,
+    hidden: options.hidden,
+    components: {input: SecretInput},
+  })
+}
 
 /**
  * Credential Schema
  *
  * Stores API credentials and authentication details.
  *
- * SECURITY NOTE: In production, sensitive values should be stored
- * encrypted or reference external secret managers. This schema
- * supports both direct values and external references.
+ * SECURITY NOTE: In production, use the "Environment Variable" storage method.
+ * This stores only the env var name in Sanity — the actual secret lives on
+ * your server (in .env or a cloud secret manager like AWS Secrets Manager).
+ *
+ * When "Direct Value" is selected, fields are masked (password input) and a
+ * warning banner is shown reminding editors to switch to env mode for production.
  *
  * Credential types:
  * - anthropic: { api_key }
@@ -71,8 +104,8 @@ export default defineType({
       description: 'How the credential values are stored',
       options: {
         list: [
-          {title: 'Environment Variable', value: 'env'},
-          {title: 'Direct Value (not recommended for production)', value: 'direct'},
+          {title: 'Environment Variable (recommended)', value: 'env'},
+          {title: 'Direct Value (development only)', value: 'direct'},
           {title: 'External Secret Manager', value: 'external'},
         ],
       },
@@ -80,78 +113,61 @@ export default defineType({
       validation: (Rule) => Rule.required(),
     }),
 
-    // ── Simple API-key credentials ────────────────────────
+    // ── Warning banner (rendered after storageMethod) ─────
+    // This is a virtual/display-only field that shows a warning when direct mode is active.
     defineField({
-      name: 'anthropicApiKey',
-      title: 'Anthropic API Key',
+      name: 'securityNotice',
+      title: ' ',
       type: 'string',
+      readOnly: true,
+      hidden: ({document}) => document?.storageMethod !== 'direct',
+      components: {
+        input: CredentialWarningBanner,
+      },
+    }),
+
+    // ── Simple API-key credentials (sensitive — masked) ───
+    secretField('anthropicApiKey', 'Anthropic API Key', {
       description: 'API key or env var name (e.g., "ANTHROPIC_API_KEY")',
       hidden: ({document}) => document?.type !== 'anthropic',
     }),
-    defineField({
-      name: 'openaiApiKey',
-      title: 'OpenAI API Key',
-      type: 'string',
+    secretField('openaiApiKey', 'OpenAI API Key', {
       description: 'API key or env var name',
       hidden: ({document}) => document?.type !== 'openai',
     }),
-    defineField({
-      name: 'braveApiKey',
-      title: 'Brave Search API Key',
-      type: 'string',
+    secretField('braveApiKey', 'Brave Search API Key', {
       description: 'API key or env var name (e.g., "BRAVE_API_KEY")',
       hidden: ({document}) => document?.type !== 'brave',
     }),
-    defineField({
-      name: 'serpApiKey',
-      title: 'SerpApi API Key',
-      type: 'string',
+    secretField('serpApiKey', 'SerpApi API Key', {
       description: 'API key or env var name (e.g., "SERPAPI_KEY")',
       hidden: ({document}) => document?.type !== 'serpapi',
     }),
-    defineField({
-      name: 'semrushApiKey',
-      title: 'Semrush API Key',
-      type: 'string',
+    secretField('semrushApiKey', 'Semrush API Key', {
       description: 'API key or env var name (e.g., "SEMRUSH_API_KEY")',
       hidden: ({document}) => document?.type !== 'semrush',
     }),
-    defineField({
-      name: 'googleApiKey',
-      title: 'Google API Key',
-      type: 'string',
+    secretField('googleApiKey', 'Google API Key', {
       description: 'Shared API key for Google services (PageSpeed, YouTube, etc.)',
       hidden: ({document}) => document?.type !== 'google_api',
     }),
-    defineField({
-      name: 'hunterApiKey',
-      title: 'Hunter.io API Key',
-      type: 'string',
+    secretField('hunterApiKey', 'Hunter.io API Key', {
       description: 'API key or env var name (e.g., "HUNTER_API_KEY")',
       hidden: ({document}) => document?.type !== 'hunter',
     }),
-    defineField({
-      name: 'clearbitApiKey',
-      title: 'Clearbit API Key',
-      type: 'string',
+    secretField('clearbitApiKey', 'Clearbit API Key', {
       description: 'API key or env var name (e.g., "CLEARBIT_API_KEY")',
       hidden: ({document}) => document?.type !== 'clearbit',
     }),
 
-    // ── GitHub credentials ────────────────────────────────
-    defineField({
-      name: 'githubPersonalAccessToken',
-      title: 'Personal Access Token',
-      type: 'string',
+    // ── GitHub credentials (sensitive) ────────────────────
+    secretField('githubPersonalAccessToken', 'Personal Access Token', {
       description: 'GitHub PAT or env var name (e.g., "GITHUB_PERSONAL_ACCESS_TOKEN")',
       hidden: ({document}) => document?.type !== 'github',
     }),
 
     // ── Sanity credentials ────────────────────────────────
-    defineField({
-      name: 'sanityApiToken',
-      title: 'API Token',
-      type: 'string',
+    secretField('sanityApiToken', 'API Token', {
       description: 'Sanity API token or env var name',
       hidden: ({document}) => document?.type !== 'sanity',
     }),
@@ -170,11 +186,8 @@ export default defineType({
       hidden: ({document}) => document?.type !== 'sanity',
     }),
 
-    // ── Slack credentials ─────────────────────────────────
-    defineField({
-      name: 'slackWebhookUrl',
-      title: 'Webhook URL',
-      type: 'string',
+    // ── Slack credentials (sensitive) ─────────────────────
+    secretField('slackWebhookUrl', 'Webhook URL', {
       description: 'Slack incoming webhook URL or env var name',
       hidden: ({document}) => document?.type !== 'slack',
     }),
@@ -219,49 +232,32 @@ export default defineType({
       hidden: ({document}) => document?.type !== 'gsc',
     }),
 
-    // ── Google Ads credentials ────────────────────────────
-    defineField({
-      name: 'googleAdsDeveloperToken',
-      title: 'Developer Token',
-      type: 'string',
+    // ── Google Ads credentials (sensitive) ─────────────────
+    secretField('googleAdsDeveloperToken', 'Developer Token', {
       hidden: ({document}) => document?.type !== 'google_ads',
     }),
-    defineField({
-      name: 'googleAdsClientId',
-      title: 'Client ID',
-      type: 'string',
+    secretField('googleAdsClientId', 'Client ID', {
       hidden: ({document}) => document?.type !== 'google_ads',
     }),
-    defineField({
-      name: 'googleAdsClientSecret',
-      title: 'Client Secret',
-      type: 'string',
+    secretField('googleAdsClientSecret', 'Client Secret', {
       hidden: ({document}) => document?.type !== 'google_ads',
     }),
-    defineField({
-      name: 'googleAdsRefreshToken',
-      title: 'Refresh Token',
-      type: 'string',
+    secretField('googleAdsRefreshToken', 'Refresh Token', {
       hidden: ({document}) => document?.type !== 'google_ads',
     }),
     defineField({
       name: 'googleAdsCustomerId',
       title: 'Customer ID',
       type: 'string',
+      description: 'Google Ads account ID (e.g., "123-456-7890")',
       hidden: ({document}) => document?.type !== 'google_ads',
     }),
 
     // ── Reddit credentials ────────────────────────────────
-    defineField({
-      name: 'redditClientId',
-      title: 'Client ID',
-      type: 'string',
+    secretField('redditClientId', 'Client ID', {
       hidden: ({document}) => document?.type !== 'reddit',
     }),
-    defineField({
-      name: 'redditClientSecret',
-      title: 'Client Secret',
-      type: 'string',
+    secretField('redditClientSecret', 'Client Secret', {
       hidden: ({document}) => document?.type !== 'reddit',
     }),
     defineField({
@@ -299,11 +295,13 @@ export default defineType({
       title: 'name',
       type: 'type',
       environment: 'environment',
+      storageMethod: 'storageMethod',
     },
-    prepare({title, type, environment}) {
+    prepare({title, type, environment, storageMethod}) {
+      const lock = storageMethod === 'env' ? '🔒' : storageMethod === 'direct' ? '⚠️' : '🔗'
       return {
-        title,
-        subtitle: `${type} (${environment})`,
+        title: `${lock} ${title || 'Untitled'}`,
+        subtitle: `${type} · ${environment || 'development'} · ${storageMethod || 'env'}`,
       }
     },
   },

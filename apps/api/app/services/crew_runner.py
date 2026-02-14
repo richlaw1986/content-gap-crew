@@ -771,6 +771,10 @@ class CrewRunner:
                     nk = _normalize(role_key)
                     if nk in norm or norm in nk:
                         return name
+                # Safety: if the raw label is garbage (no letters), fall back
+                # to the current task's agent or a generic label.
+                if not _re.search(r"[a-zA-Z]", raw_label):
+                    return "Agent"
                 return raw_label  # fall back to raw label
 
             if visible_agents:
@@ -853,6 +857,26 @@ class CrewRunner:
                 if t.get("name") != "Memory Summary"
             ]
 
+            def _resolve_agent() -> str:
+                """Best-effort agent name for the current context.
+
+                Tries, in order:
+                1. last_agent seen in stdout, resolved to display name
+                2. The agent assigned to the current task (by index)
+                3. Generic "Agent"
+                """
+                display = _display_name(last_agent)
+                if display != "Agent":
+                    return display
+                # Fall back to the current task's assigned agent
+                idx = task_index if task_index < len(task_info_list) else len(task_info_list) - 1
+                if idx >= 0 and task_info_list:
+                    aid = task_info_list[idx].get("agent_id", "")
+                    name = agent_name_by_id.get(aid)
+                    if name:
+                        return name
+                return "Agent"
+
             # Regex patterns for tool call detection in CrewAI stdout
             tool_use_re = re.compile(
                 r"(?:Using tool|Tool Name|Calling tool)[:\s]+(\S+)", re.IGNORECASE
@@ -882,7 +906,7 @@ class CrewRunner:
                     tc_event = {
                         "event": "agent_message",
                         "type": "tool_call",
-                        "agent": _display_name(last_agent),
+                        "agent": _resolve_agent(),
                         "tool": _last_tool_name,
                         "content": f"Using tool: {_last_tool_name}",
                         "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -898,7 +922,7 @@ class CrewRunner:
                     tr_event = {
                         "event": "agent_message",
                         "type": "tool_result",
-                        "agent": _display_name(last_agent),
+                        "agent": _resolve_agent(),
                         "tool": _last_tool_name or "unknown",
                         "content": snippet,
                         "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -915,9 +939,13 @@ class CrewRunner:
 
                 if "Agent:" in text:
                     parts = text.split("Agent:", 1)
-                    agent_name = parts[1].strip() if len(parts) > 1 else None
-                    if agent_name:
-                        last_agent = agent_name
+                    raw_name = parts[1].strip() if len(parts) > 1 else ""
+                    # Strip box-drawing/decorative characters that CrewAI
+                    # wraps agent names in (╭─ Agent: SEO Specialist ─╮)
+                    cleaned_name = re.sub(r"[╭╮╰╯┌┐└┘─│┃┼═*]+", "", raw_name).strip()
+                    # Only update if it contains real text, not just symbols
+                    if cleaned_name and re.search(r"[a-zA-Z]", cleaned_name):
+                        last_agent = cleaned_name
 
                 # Emit workflow stage message when a new task starts
                 if "Task Started" in text or ("Task:" in text and "Started" in text):
@@ -978,7 +1006,7 @@ class CrewRunner:
                                 stream_event = {
                                     "event": "agent_message",
                                     "type": "message",
-                                    "agent": _display_name(last_agent),
+                                    "agent": _resolve_agent(),
                                     "content": content,
                                     "timestamp": datetime.now(timezone.utc).isoformat(),
                                 }
@@ -1005,7 +1033,7 @@ class CrewRunner:
                     stream_event = {
                         "event": "agent_message",
                         "type": "message",
-                        "agent": _display_name(last_agent),
+                        "agent": _resolve_agent(),
                         "content": content,
                         "timestamp": datetime.now(timezone.utc).isoformat(),
                     }

@@ -5,10 +5,18 @@ import {ChatArea} from './components/ChatArea'
 import {ChatHistory, type SidebarConversation} from './components/ChatHistory'
 import {AgentActivityFeed} from './components/AgentActivityFeed'
 import {useStudioConversation} from './hooks/useStudioConversation'
+import type {MessageAttachment} from './hooks/useStudioConversation'
 
 // =============================================================================
-// Config — where is the FastAPI backend?
+// Config — where is the backend?
 // Only used for the WebSocket connection. All CRUD goes through Sanity directly.
+//
+// Backends:
+//   Python (FastAPI/CrewAI): http://localhost:8000  (default)
+//   Mastra (TypeScript):     http://localhost:4111
+//
+// Switch by setting SANITY_STUDIO_API_URL in your .env:
+//   SANITY_STUDIO_API_URL=http://localhost:4111
 // =============================================================================
 
 function getApiUrl(): string {
@@ -184,7 +192,7 @@ export function ChatTool() {
   )
 
   const handleSendMessage = useCallback(
-    async (content: string) => {
+    async (content: string, attachments?: MessageAttachment[]) => {
       if (!activeConvId) {
         // Auto-create a conversation when user sends the first message
         try {
@@ -192,7 +200,7 @@ export function ChatTool() {
           setActiveConvId(convId)
           fetchConversations()
           // Give the WS a moment to connect before sending
-          setTimeout(() => sendMessage(content), 500)
+          setTimeout(() => sendMessage(content, attachments), 500)
         } catch {
           toast.push({
             status: 'error',
@@ -202,7 +210,7 @@ export function ChatTool() {
         }
         return
       }
-      sendMessage(content)
+      sendMessage(content, attachments)
     },
     [activeConvId, createConversation, sendMessage, fetchConversations, toast],
   )
@@ -238,6 +246,7 @@ export function ChatTool() {
           awaitingInput={awaitingInput}
           onSendMessage={handleSendMessage}
           onSendAnswer={handleSendAnswer}
+          sanityClient={client}
         />
       </Box>
 

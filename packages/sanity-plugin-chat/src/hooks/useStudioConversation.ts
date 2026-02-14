@@ -10,6 +10,14 @@ export interface QuestionOption {
   description?: string
 }
 
+export interface MessageAttachment {
+  assetId: string
+  url: string
+  filename: string
+  mimeType: string
+  size: number
+}
+
 export interface ConversationMessage {
   id: string
   type:
@@ -38,6 +46,7 @@ export interface ConversationMessage {
   status?: string
   replayed?: boolean
   isReply?: boolean
+  attachments?: MessageAttachment[]
   timestamp: string
 }
 
@@ -56,7 +65,7 @@ export interface UseStudioConversationReturn {
   isRunning: boolean
   awaitingInput: boolean
   currentRunId: string | null
-  sendMessage: (content: string) => void
+  sendMessage: (content: string, attachments?: MessageAttachment[]) => void
   sendAnswer: (content: string, questionId?: string, displayContent?: string) => void
   connect: () => void
   disconnect: () => void
@@ -85,6 +94,7 @@ export function useStudioConversation(
   const [connectEpoch, setConnectEpoch] = useState(0)
   const connectedIdRef = useRef<string | null>(null)
   const intentionalCloseRef = useRef(false)
+  const _lastReplayedQuestionRef = useRef<ConversationMessage | null>(null)
 
   // Stable refs for callbacks
   const onMessageRef = useRef(onMessage)
@@ -153,11 +163,22 @@ export function useStudioConversation(
       ws.onopen = () => {
         setIsConnected(true)
         attemptsRef.current = 0
+        _lastReplayedQuestionRef.current = null
         pingInterval = setInterval(() => {
           if (ws.readyState === WebSocket.OPEN) {
             ws.send(JSON.stringify({type: 'ping'}))
           }
         }, 25_000)
+
+        // After a short delay, check if replay left an unanswered question
+        // (handles the case where no non-replayed messages follow).
+        setTimeout(() => {
+          if (_lastReplayedQuestionRef.current) {
+            setAwaitingInput(true)
+            onQuestionRef.current?.(_lastReplayedQuestionRef.current)
+            _lastReplayedQuestionRef.current = null
+          }
+        }, 2000)
       }
 
       ws.onclose = () => {
@@ -186,7 +207,23 @@ export function useStudioConversation(
 
           if (msg.replayed) {
             setMessages((prev) => [...prev, msg])
+            // Track the last replayed question — we'll resolve this below
+            // once we receive a non-replayed message or the stream ends.
+            if (msg.type === 'question') {
+              _lastReplayedQuestionRef.current = msg
+            } else if (msg.type === 'answer' || msg.type === 'user_message') {
+              // An answer was replayed after the question — it was resolved
+              _lastReplayedQuestionRef.current = null
+            }
             return
+          }
+
+          // First non-replayed message: if there's an unresolved replayed question,
+          // it means the user hasn't answered yet — re-enter awaiting state.
+          if (_lastReplayedQuestionRef.current) {
+            setAwaitingInput(true)
+            onQuestionRef.current?.(_lastReplayedQuestionRef.current)
+            _lastReplayedQuestionRef.current = null
           }
 
           switch (msg.type) {
@@ -239,15 +276,20 @@ export function useStudioConversation(
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [conversationId, connectEpoch, wsBase])
 
-  const sendMessage = useCallback((content: string) => {
+  const sendMessage = useCallback((content: string, attachments?: MessageAttachment[]) => {
     const ws = wsRef.current
     if (ws?.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({type: 'user_message', content}))
+      const payload: Record<string, unknown> = {type: 'user_message', content}
+      if (attachments?.length) {
+        payload.attachments = attachments
+      }
+      ws.send(JSON.stringify(payload))
       const msg: ConversationMessage = {
         id: `user-${Date.now()}`,
         type: 'user_message',
         sender: 'user',
         content,
+        attachments: attachments?.length ? attachments : undefined,
         timestamp: new Date().toISOString(),
       }
       setMessages((prev) => [...prev, msg])

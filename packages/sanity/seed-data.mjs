@@ -103,6 +103,20 @@ const tools = [
     category: 'search',
   },
   {
+    _id: 'tool-js-rendering-audit',
+    _type: 'tool',
+    name: 'js_rendering_audit',
+    displayName: 'JS Rendering Audit',
+    description:
+      'Compare a page\'s raw HTML source (no JavaScript) with its fully rendered DOM (with JavaScript) ' +
+      'to assess what content is client-side rendered. Returns element counts, text deltas, JS-only headings, ' +
+      'lazy-loaded images, and SEO risk level. Essential for technical SEO audits.',
+    implementationType: 'builtin',
+    credentialTypes: [],
+    enabled: true,
+    category: 'seo',
+  },
+  {
     _id: 'tool-bigquery-describe',
     _type: 'tool',
     name: 'bigquery_describe_table',
@@ -868,6 +882,7 @@ const agents = [
       {_type: 'reference', _ref: 'tool-content-audit'},
       {_type: 'reference', _ref: 'tool-bigquery-visits'},
       {_type: 'reference', _ref: 'tool-competitor-gaps'},
+      {_type: 'reference', _ref: 'tool-js-rendering-audit'},
       // New HTTP tools
       {_type: 'reference', _ref: 'tool-serpapi-search'},
       {_type: 'reference', _ref: 'tool-serpapi-trends'},

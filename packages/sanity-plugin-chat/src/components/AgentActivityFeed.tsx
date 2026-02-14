@@ -42,10 +42,36 @@ interface OutputItem {
 }
 
 // =============================================================================
+// Agent pill colors — matches the per-agent palette used in ChatArea
+// =============================================================================
+
+const AGENT_PILL_COLORS: Record<string, {bg: string; text: string; border: string}> = {
+  planner:   {bg: 'rgba(99,102,241,0.12)',  text: 'rgb(129,140,248)', border: 'rgba(99,102,241,0.25)'},
+  narrative: {bg: 'rgba(139,92,246,0.12)',   text: 'rgb(167,139,250)', border: 'rgba(139,92,246,0.25)'},
+  memory:    {bg: 'rgba(139,92,246,0.12)',   text: 'rgb(167,139,250)', border: 'rgba(139,92,246,0.25)'},
+  product:   {bg: 'rgba(5,150,105,0.12)',    text: 'rgb(52,211,153)',  border: 'rgba(5,150,105,0.25)'},
+  data:      {bg: 'rgba(2,132,199,0.12)',    text: 'rgb(56,189,248)',  border: 'rgba(2,132,199,0.25)'},
+  technical: {bg: 'rgba(217,119,6,0.12)',    text: 'rgb(251,191,36)',  border: 'rgba(217,119,6,0.25)'},
+  seo:       {bg: 'rgba(217,119,6,0.12)',    text: 'rgb(251,191,36)',  border: 'rgba(217,119,6,0.25)'},
+  quality:   {bg: 'rgba(225,29,72,0.12)',    text: 'rgb(251,113,133)', border: 'rgba(225,29,72,0.25)'},
+  review:    {bg: 'rgba(225,29,72,0.12)',     text: 'rgb(251,113,133)', border: 'rgba(225,29,72,0.25)'},
+}
+const DEFAULT_PILL = {bg: 'rgba(2,132,199,0.12)', text: 'rgb(56,189,248)', border: 'rgba(2,132,199,0.25)'}
+
+function getAgentPillColors(name: string) {
+  const lower = name?.toLowerCase() || ''
+  for (const [key, colors] of Object.entries(AGENT_PILL_COLORS)) {
+    if (lower.includes(key)) return colors
+  }
+  return DEFAULT_PILL
+}
+
+// =============================================================================
 // Styled agent pill (matches Next.js: px-2 py-0.5 rounded-full)
 // =============================================================================
 
 function AgentPill({name}: {name: string}) {
+  const c = getAgentPillColors(name)
   return (
     <span
       style={{
@@ -56,9 +82,9 @@ function AgentPill({name}: {name: string}) {
         borderRadius: 9999,
         fontSize: '0.75rem',
         lineHeight: 1.4,
-        background: 'rgba(14,165,233,0.12)',
-        color: 'rgb(56,189,248)',
-        border: '1px solid rgba(14,165,233,0.25)',
+        background: c.bg,
+        color: c.text,
+        border: `1px solid ${c.border}`,
       }}
     >
       <span
@@ -66,7 +92,7 @@ function AgentPill({name}: {name: string}) {
           width: 6,
           height: 6,
           borderRadius: '50%',
-          background: 'rgb(56,189,248)',
+          background: c.text,
           flexShrink: 0,
         }}
       />

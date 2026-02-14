@@ -1,8 +1,13 @@
-import {useEffect, useMemo, useRef, useState} from 'react'
+import {useCallback, useEffect, useMemo, useRef, useState} from 'react'
 import {Box, Button, Flex, TextInput} from '@sanity/ui'
 import {MarkdownContent} from './MarkdownContent'
 import {parseArtifacts, type Artifact} from '../lib/parseArtifacts'
-import type {ConversationMessage, QuestionOption} from '../hooks/useStudioConversation'
+import type {
+  ConversationMessage,
+  MessageAttachment,
+  QuestionOption,
+} from '../hooks/useStudioConversation'
+import type {SanityClient} from 'sanity'
 
 // =============================================================================
 // Props
@@ -13,8 +18,10 @@ interface ChatAreaProps {
   isConnected?: boolean
   isRunning?: boolean
   awaitingInput?: boolean
-  onSendMessage?: (content: string) => void
+  onSendMessage?: (content: string, attachments?: MessageAttachment[]) => void
   onSendAnswer?: (content: string, questionId?: string, displayContent?: string) => void
+  /** Sanity client for uploading attachments */
+  sanityClient?: SanityClient
 }
 
 const WELCOME_MESSAGE: ConversationMessage = {
@@ -521,9 +528,13 @@ export function ChatArea({
   awaitingInput = false,
   onSendMessage,
   onSendAnswer,
+  sanityClient,
 }: ChatAreaProps) {
   const [input, setInput] = useState('')
+  const [pendingFiles, setPendingFiles] = useState<File[]>([])
+  const [uploading, setUploading] = useState(false)
   const bottomRef = useRef<HTMLDivElement>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
 
   const displayMessages = messages.length > 0 ? messages : [WELCOME_MESSAGE]
 
@@ -540,14 +551,57 @@ export function ChatArea({
     return undefined
   }, [messages])
 
-  const handleSubmit = () => {
-    if (!input.trim()) return
+  // Upload files to Sanity CDN and return attachment metadata
+  const uploadFiles = useCallback(
+    async (files: File[]): Promise<MessageAttachment[]> => {
+      if (!sanityClient || !files.length) return []
+      const attachments: MessageAttachment[] = []
+      for (const file of files) {
+        const assetType = file.type.startsWith('image/') ? 'image' : 'file'
+        const asset = await sanityClient.assets.upload(assetType, file, {
+          filename: file.name,
+          contentType: file.type,
+        })
+        attachments.push({
+          assetId: asset._id,
+          url: asset.url,
+          filename: file.name,
+          mimeType: file.type,
+          size: file.size,
+        })
+      }
+      return attachments
+    },
+    [sanityClient],
+  )
+
+  const handleSubmit = async () => {
+    if (!input.trim() && !pendingFiles.length) return
+
     if (awaitingInput) {
       onSendAnswer?.(input.trim(), latestQuestionId)
-    } else {
-      onSendMessage?.(input.trim())
+      setInput('')
+      setPendingFiles([])
+      return
     }
+
+    // Upload any pending files first
+    let attachments: MessageAttachment[] | undefined
+    if (pendingFiles.length) {
+      setUploading(true)
+      try {
+        attachments = await uploadFiles(pendingFiles)
+      } catch (err) {
+        console.error('Failed to upload files:', err)
+        setUploading(false)
+        return
+      }
+      setUploading(false)
+    }
+
+    onSendMessage?.(input.trim() || '(attached files)', attachments)
     setInput('')
+    setPendingFiles([])
   }
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -555,6 +609,19 @@ export function ChatArea({
       e.preventDefault()
       handleSubmit()
     }
+  }
+
+  const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || [])
+    if (files.length) {
+      setPendingFiles((prev) => [...prev, ...files])
+    }
+    // Reset input so re-selecting the same file works
+    if (fileInputRef.current) fileInputRef.current.value = ''
+  }
+
+  const removePendingFile = (idx: number) => {
+    setPendingFiles((prev) => prev.filter((_, i) => i !== idx))
   }
 
   const shouldShow = (msg: ConversationMessage) => {
@@ -716,6 +783,57 @@ export function ChatArea({
                       }}
                     >
                       {msg.content}
+                      {msg.attachments && msg.attachments.length > 0 && (
+                        <div style={{display: 'flex', flexWrap: 'wrap', gap: 6, marginTop: 8}}>
+                          {msg.attachments.map((att, ai) =>
+                            att.mimeType.startsWith('image/') ? (
+                              <a
+                                key={ai}
+                                href={att.url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                style={{display: 'block'}}
+                              >
+                                <img
+                                  src={att.url}
+                                  alt={att.filename}
+                                  style={{
+                                    maxWidth: 200,
+                                    maxHeight: 150,
+                                    borderRadius: 8,
+                                    objectFit: 'cover',
+                                    border: '1px solid rgba(255,255,255,0.1)',
+                                  }}
+                                />
+                              </a>
+                            ) : (
+                              <a
+                                key={ai}
+                                href={att.url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                style={{
+                                  display: 'inline-flex',
+                                  alignItems: 'center',
+                                  gap: 4,
+                                  padding: '4px 10px',
+                                  borderRadius: 8,
+                                  fontSize: '0.75rem',
+                                  background: 'rgba(255,255,255,0.08)',
+                                  color: 'rgb(129,140,248)',
+                                  border: '1px solid rgba(255,255,255,0.12)',
+                                  textDecoration: 'none',
+                                }}
+                              >
+                                📄 {att.filename}
+                                <span style={{opacity: 0.6, fontSize: '0.65rem'}}>
+                                  {(att.size / 1024).toFixed(0)}KB
+                                </span>
+                              </a>
+                            ),
+                          )}
+                        </div>
+                      )}
                     </div>
                   </div>
                 )
@@ -927,30 +1045,121 @@ export function ChatArea({
           borderTop: '1px solid var(--card-border-color)',
         }}
       >
+        {/* Pending files preview */}
+        {pendingFiles.length > 0 && (
+          <div
+            style={{
+              display: 'flex',
+              flexWrap: 'wrap',
+              gap: 8,
+              marginBottom: 8,
+            }}
+          >
+            {pendingFiles.map((file, idx) => (
+              <div
+                key={`${file.name}-${idx}`}
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  gap: 6,
+                  padding: '4px 10px',
+                  borderRadius: 8,
+                  fontSize: '0.75rem',
+                  background: 'rgba(99,102,241,0.1)',
+                  color: 'rgb(129,140,248)',
+                  border: '1px solid rgba(99,102,241,0.2)',
+                }}
+              >
+                <span>{file.type.startsWith('image/') ? '🖼' : '📄'}</span>
+                <span style={{maxWidth: 120, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap'}}>
+                  {file.name}
+                </span>
+                <span style={{fontSize: '0.65rem', opacity: 0.7}}>
+                  {(file.size / 1024).toFixed(0)}KB
+                </span>
+                <button
+                  onClick={() => removePendingFile(idx)}
+                  style={{
+                    background: 'none',
+                    border: 'none',
+                    cursor: 'pointer',
+                    color: 'inherit',
+                    padding: 0,
+                    fontSize: '0.875rem',
+                    lineHeight: 1,
+                    opacity: 0.7,
+                  }}
+                >
+                  ×
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
         <Flex gap={2} align="center">
+          {/* Hidden file input */}
+          <input
+            ref={fileInputRef}
+            type="file"
+            multiple
+            style={{display: 'none'}}
+            onChange={handleFileSelect}
+            accept="image/*,.pdf,.csv,.txt,.md,.json,.xml,.html,.doc,.docx,.xls,.xlsx"
+          />
+
+          {/* Attach button */}
+          {sanityClient && (
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              disabled={uploading}
+              title="Attach files"
+              style={{
+                background: 'none',
+                border: '1px solid var(--card-border-color)',
+                borderRadius: 8,
+                padding: '8px 10px',
+                cursor: uploading ? 'wait' : 'pointer',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                color: 'var(--card-muted-fg-color, #a1a1aa)',
+                fontSize: '1.1rem',
+                flexShrink: 0,
+                opacity: uploading ? 0.5 : 1,
+              }}
+            >
+              📎
+            </button>
+          )}
+
           <Box flex={1}>
             <TextInput
               value={input}
               onChange={(e) => setInput(e.currentTarget.value)}
               onKeyDown={handleKeyDown}
               placeholder={
-                awaitingInput
-                  ? 'Type your answer…'
-                  : isRunning
-                    ? 'Add context or follow up…'
-                    : 'Ask anything…'
+                uploading
+                  ? 'Uploading files…'
+                  : awaitingInput
+                    ? 'Type your answer…'
+                    : isRunning
+                      ? 'Add context or follow up…'
+                      : 'Ask anything…'
               }
               fontSize={1}
               padding={3}
+              disabled={uploading}
             />
           </Box>
           <Button
             tone="primary"
-            mode={input.trim() ? 'default' : 'ghost'}
-            disabled={!input.trim()}
+            mode={input.trim() || pendingFiles.length ? 'default' : 'ghost'}
+            disabled={(!input.trim() && !pendingFiles.length) || uploading}
             onClick={handleSubmit}
             padding={3}
-            text="Send"
+            text={uploading ? 'Uploading…' : 'Send'}
             fontSize={1}
           />
         </Flex>

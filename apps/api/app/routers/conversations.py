@@ -244,9 +244,17 @@ async def delete_conversation(conversation_id: str, request: Request) -> dict[st
 
 # ── WebSocket endpoint ─────────────────────────────────────────
 
-# Event types that are live-only (streamed via WS but not persisted / replayed).
-# "system" covers the "Crew assembled: ..." event from crew_runner.
-_ephemeral_ws_types = {"thinking", "tool_call", "tool_result", "status", "system"}
+# Event types that are truly ephemeral — not persisted or replayed.
+# Only "status" qualifies: it's a state toggle, not meaningful content.
+# Everything else (thinking, tool_call, tool_result, system, agent_message,
+# complete, question, etc.) is persisted so returning users see full history.
+_ephemeral_ws_types = {"status"}
+
+# ── Global run registry ────────────────────────────────────────
+# Maps conversation_id → run state dict, so runs survive WS disconnects.
+# When a WS closes, the run continues writing to Sanity. When a new WS
+# connects to the same conversation, it reattaches to receive live events.
+_active_runs: dict[str, dict[str, Any]] = {}
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -276,16 +284,18 @@ async def conversation_ws(websocket: WebSocket, conversation_id: str):
         return
 
     # ── Replay existing messages so the client sees full history ────
-    # Skip ephemeral status messages (thinking, tool_call, tool_result)
-    # — they were live events, not conversation content worth replaying.
+    # Skip ephemeral live-only events (thinking, tool_call, tool_result, status)
+    # but DO replay system messages ("Crew assembled", "Planning...") and
+    # complete messages (final output) so returning users see the full picture.
     existing_messages = conv.get("messages") or []
     for m in existing_messages:
-        content = m.get("content", "")
-        if not content:
-            continue
         sender = m.get("sender", "system")
         msg_type = m.get("type", "message")
         if msg_type in _ephemeral_ws_types:
+            continue
+
+        content = m.get("content", "")
+        if not content:
             continue
 
         # Map Sanity storage types to the WS protocol types the frontend expects
@@ -294,7 +304,7 @@ async def conversation_ws(websocket: WebSocket, conversation_id: str):
         elif msg_type == "message":
             ws_type = "agent_message"
         else:
-            ws_type = msg_type
+            ws_type = msg_type  # system, question, complete, answer, error, thinking, tool_call, tool_result
 
         try:
             replay_msg: dict[str, Any] = {
@@ -304,10 +314,21 @@ async def conversation_ws(websocket: WebSocket, conversation_id: str):
                 "timestamp": m.get("timestamp", _now()),
                 "replayed": True,
             }
+            # Include attachments on user messages
+            raw_att = m.get("attachments")
+            if raw_att:
+                replay_msg["attachments"] = raw_att
             # Forward metadata flags so the frontend can render faithfully.
             meta = m.get("metadata") or {}
             if meta.get("isReply"):
                 replay_msg["isReply"] = True
+            # For tool_call / tool_result, forward the tool name
+            if meta.get("tool"):
+                replay_msg["tool"] = meta["tool"]
+            # For complete messages, include the output field
+            if ws_type == "complete" and meta.get("output"):
+                replay_msg["output"] = meta["output"]
+                replay_msg["runId"] = meta.get("runId", "")
             # For question messages, forward stored options/selectionType
             # so the frontend knows this was a selection question (now read-only).
             if ws_type == "question":
@@ -325,10 +346,79 @@ async def conversation_ws(websocket: WebSocket, conversation_id: str):
     lead_agent_config: dict[str, Any] | None = None  # default agent for replies
     active_crew_agents: list[dict[str, Any]] = []      # all agents in the current crew
 
+    # ── Restore agent state from conversation history ────────────
+    # If this conversation already had a completed run, restore lead_agent_config
+    # and active_crew_agents so follow-up messages go to the reply path
+    # instead of triggering a whole new crew selection + planning flow.
+    has_completed_run = any(m.get("type") == "complete" for m in existing_messages)
+    if has_completed_run:
+        agent_senders: list[str] = []
+        for m in existing_messages:
+            s = m.get("sender", "")
+            t = m.get("type", "")
+            if t == "message" and s and s not in ("user", "system"):
+                if s not in agent_senders:
+                    agent_senders.append(s)
+
+        if agent_senders:
+            try:
+                all_agents_restore = await sanity.list_agents_full()
+                name_lower_map = {a["name"].lower(): a for a in all_agents_restore if a.get("name")}
+                active_crew_agents = [
+                    name_lower_map[s.lower()]
+                    for s in agent_senders
+                    if s.lower() in name_lower_map
+                ]
+                first_sender = agent_senders[0].lower()
+                lead_agent_config = name_lower_map.get(first_sender) or (
+                    active_crew_agents[0] if active_crew_agents else None
+                )
+                if lead_agent_config:
+                    logger.info(
+                        "Restored agent state for conversation %s: lead=%s, crew=[%s]",
+                        conversation_id,
+                        lead_agent_config.get("name"),
+                        ", ".join(a.get("name", "?") for a in active_crew_agents),
+                    )
+            except Exception as exc:
+                logger.warning("Failed to restore agent state: %s", exc)
+
+    # Mutable reference for the send callback — allows detaching when WS closes
+    # while the run continues in the background.
+    _ws_ref: dict[str, Any] = {"ws": websocket}
+
     async def send(msg: dict):
-        """Send a JSON message to the client, ignoring errors if closed."""
+        """Send a JSON message to the client if connected, silently skip if not."""
+        ws = _ws_ref.get("ws")
+        if ws is None:
+            return  # Detached — run is continuing in background
         try:
-            await websocket.send_json(msg)
+            await ws.send_json(msg)
+        except Exception:
+            pass
+
+    # ── Check for an existing active run on this conversation ──────
+    # If the user navigated away and came back, we reattach to the in-progress run.
+    existing_run = _active_runs.get(conversation_id)
+    if existing_run and existing_run.get("task") and not existing_run["task"].done():
+        logger.info(f"Reattaching WS to active run on conversation {conversation_id}")
+        # Reattach the send function so the running task can push to the new WS
+        existing_run["send_ref"]["ws"] = websocket
+        _ws_ref = existing_run["send_ref"]
+        run_task = existing_run["task"]
+        pending_questions = existing_run.get("pending_questions", {})
+        lead_agent_config = existing_run.get("lead_agent_config")
+        active_crew_agents = existing_run.get("active_crew_agents", [])
+
+        # Let the client know a run is already in progress
+        try:
+            await websocket.send_json({
+                "type": "status",
+                "status": "running",
+                "runId": existing_run.get("run_id", ""),
+                "timestamp": _now(),
+                "reattached": True,
+            })
         except Exception:
             pass
 
@@ -466,6 +556,9 @@ async def conversation_ws(websocket: WebSocket, conversation_id: str):
                 await sanity.update_conversation_status(conversation_id, "active")
             except Exception:
                 pass  # websocket may already be closed
+        finally:
+            # Clean up global registry when the run finishes (success or failure)
+            _active_runs.pop(conversation_id, None)
 
     async def _ask_user(content: str, **extra) -> str:
         """Send a question to the user and wait for their answer.
@@ -545,6 +638,36 @@ async def conversation_ws(websocket: WebSocket, conversation_id: str):
                 f"---\n\n"
                 f"NEW USER REQUEST:\n{objective}"
             )
+
+        # ── Fetch attachment content and append to objective ──
+        raw_attachments = user_inputs.get("attachments") or []
+        if raw_attachments:
+            import httpx
+            attach_block = "\n\nATTACHED FILES:\n"
+            for att in raw_attachments:
+                url = att.get("url", "")
+                fname = att.get("filename", "file")
+                mime = att.get("mimeType", "")
+                if not url:
+                    continue
+                try:
+                    if mime.startswith("image/"):
+                        # For images, note the URL — agent can fetch if needed
+                        attach_block += f"- [Image] {fname}: {url}\n"
+                    else:
+                        # For text-based files, fetch and inline content
+                        async with httpx.AsyncClient(timeout=15.0) as http:
+                            resp = await http.get(url)
+                        if resp.status_code < 400:
+                            text = resp.text
+                            if len(text) > 8000:
+                                text = text[:8000] + "\n... [truncated]"
+                            attach_block += f"- {fname}:\n```\n{text}\n```\n\n"
+                        else:
+                            attach_block += f"- {fname}: (could not fetch — HTTP {resp.status_code})\n"
+                except Exception as e:
+                    attach_block += f"- {fname}: (could not fetch — {e})\n"
+            enriched_objective += attach_block
 
         # ── Step 1: Crew selection ────────────────────────────
         # Present available crews to the user so they can pick one
@@ -724,6 +847,13 @@ async def conversation_ws(websocket: WebSocket, conversation_id: str):
 
         # ── Planning phase ──────────────────────────────────
         await send({"type": "system", "content": "Planning your workflow...", "timestamp": _now()})
+        await sanity.append_message(conversation_id, {
+            "_key": _msg_key(),
+            "sender": "system",
+            "type": "system",
+            "content": "Planning your workflow...",
+            "timestamp": _now(),
+        })
 
         try:
             plan = await plan_crew(enriched_objective, user_inputs, agents, planner)
@@ -805,6 +935,11 @@ async def conversation_ws(websocket: WebSocket, conversation_id: str):
         if lead_raw:
             lead_agent_config = lead_raw
 
+        # Update global registry with resolved agents for reattach
+        if conversation_id in _active_runs:
+            _active_runs[conversation_id]["lead_agent_config"] = lead_agent_config
+            _active_runs[conversation_id]["active_crew_agents"] = active_crew_agents
+
         # Inject memory agent
         if memory_policy and memory_agent_id:
             if all(a.id != memory_agent_id for a in planned_agents):
@@ -879,6 +1014,10 @@ async def conversation_ws(websocket: WebSocket, conversation_id: str):
         await send({"type": "status", "status": "running", "runId": run_id, "timestamp": _now()})
         await sanity.update_run_status(run_id, "running", startedAt=_now())
 
+        # Update global registry with run_id for reattach support
+        if conversation_id in _active_runs:
+            _active_runs[conversation_id]["run_id"] = run_id
+
         # ── Connect MCP servers and collect tools ──────────
         mcp_manager = MCPManager()
         mcp_tools: list = []
@@ -931,10 +1070,8 @@ async def conversation_ws(websocket: WebSocket, conversation_id: str):
                         out["tool"] = event["tool"]
 
                     await send(out)
-                    # Only persist substantive messages — skip ephemeral
-                    # live-only events (thinking, tool_call, tool_result,
-                    # system "crew assembled" etc.) which would clutter
-                    # history and cause replay duplicates.
+                    # Persist all non-status messages to Sanity so they
+                    # replay when the user returns to this conversation.
                     if ws_type not in _ephemeral_ws_types and msg_type not in _ephemeral_ws_types:
                         await sanity.append_message(conversation_id, {
                             "_key": _msg_key(),
@@ -958,11 +1095,22 @@ async def conversation_ws(websocket: WebSocket, conversation_id: str):
                         "output": output,
                         "timestamp": _now(),
                     })
+                    # Persist the final output as a "complete" message so it
+                    # can be replayed when the user returns to this conversation.
+                    await sanity.append_message(conversation_id, {
+                        "_key": _msg_key(),
+                        "sender": "system",
+                        "type": "complete",
+                        "content": (output[:200] + "…") if len(output) > 200 else output,
+                        "metadata": {"runId": run_id, "output": output},
+                        "timestamp": _now(),
+                    })
+                    # Also persist the "Run completed" system message
                     await sanity.append_message(conversation_id, {
                         "_key": _msg_key(),
                         "sender": "system",
                         "type": "system",
-                        "content": f"Run completed.",
+                        "content": "Run completed.",
                         "metadata": {"runId": run_id},
                         "timestamp": _now(),
                     })
@@ -1036,16 +1184,31 @@ async def conversation_ws(websocket: WebSocket, conversation_id: str):
                 continue
 
             content = data.get("content", "").strip()
+            attachments = data.get("attachments", []) or []
 
-            if (msg_type in ("user_message", "answer")) and content:
-                # Always persist the user message
-                await sanity.append_message(conversation_id, {
+            if (msg_type in ("user_message", "answer")) and (content or attachments):
+                content = content or "(attached files)"
+                # Always persist the user message (with attachments if any)
+                persist_msg = {
                     "_key": _msg_key(),
                     "sender": "user",
                     "type": "answer" if msg_type == "answer" else "message",
                     "content": content,
                     "timestamp": _now(),
-                })
+                }
+                if attachments:
+                    persist_msg["attachments"] = [
+                        {
+                            "_key": _msg_key(),
+                            "assetId": a.get("assetId", ""),
+                            "url": a.get("url", ""),
+                            "filename": a.get("filename", ""),
+                            "mimeType": a.get("mimeType", ""),
+                            "size": a.get("size", 0),
+                        }
+                        for a in attachments
+                    ]
+                await sanity.append_message(conversation_id, persist_msg)
 
                 # Update title from the first real message
                 if msg_type == "user_message":
@@ -1122,22 +1285,43 @@ async def conversation_ws(websocket: WebSocket, conversation_id: str):
                     })
                 else:
                     # First message in conversation — kick off a new run
+                    run_inputs = {"objective": content, "topic": content}
+                    if attachments:
+                        run_inputs["attachments"] = attachments
                     run_task = asyncio.create_task(
-                        _run_crew(content, {"objective": content, "topic": content})
+                        _run_crew(content, run_inputs)
                     )
+                    # Register in global run registry so the run survives WS disconnect
+                    _active_runs[conversation_id] = {
+                        "task": run_task,
+                        "send_ref": _ws_ref,
+                        "pending_questions": pending_questions,
+                        "lead_agent_config": lead_agent_config,
+                        "active_crew_agents": active_crew_agents,
+                    }
 
     except WebSocketDisconnect:
-        pass
+        logger.info(f"WS disconnected for conversation {conversation_id}")
     except Exception as exc:
         try:
             await send({"type": "error", "message": str(exc), "timestamp": _now()})
         except Exception:
             pass
     finally:
-        # Cancel any in-flight run
-        if run_task and not run_task.done():
-            run_task.cancel()
-        # Resolve any pending futures to prevent hangs
-        for future in pending_questions.values():
-            if not future.done():
-                future.cancel()
+        # Detach the WS from the run — the run continues in the background,
+        # persisting results to Sanity. A new WS connection can reattach later.
+        _ws_ref["ws"] = None
+
+        # If there's NO active run (or it's already done), clean up fully.
+        if not run_task or run_task.done():
+            _active_runs.pop(conversation_id, None)
+            for future in pending_questions.values():
+                if not future.done():
+                    future.cancel()
+        else:
+            # Run still going — update the registry with latest state
+            if conversation_id in _active_runs:
+                _active_runs[conversation_id].update({
+                    "lead_agent_config": lead_agent_config,
+                    "active_crew_agents": active_crew_agents,
+                })

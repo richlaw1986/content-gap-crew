@@ -14,6 +14,7 @@
     "sanity:dev": "pnpm --filter sanity dev",
     "web:dev": "pnpm --filter web dev",
     "api:dev": "pnpm --filter api dev",
+    "mastra:dev": "pnpm --filter mastra-backend dev",
     "api:docker": "docker compose up --build api",
     "api:docker:detach": "docker compose up --build -d api"
   },
