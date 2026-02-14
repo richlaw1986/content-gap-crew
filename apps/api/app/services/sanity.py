@@ -110,7 +110,8 @@ class SanityClient:
     async def list_all_skills(self) -> list[dict[str, Any]]:
         """Return all enabled skills (no search filter)."""
         query = """*[_type == "skill" && enabled != false] | order(_updatedAt desc) {
-            _id, name, description, steps, tags, toolsRequired, inputSchema, outputSchema
+            _id, name, description, steps, tags, toolsRequired, inputSchema, outputSchema,
+            playbook, references[]{ name, content }, source, ecosystemId, ecosystemInstalls
         }"""
         return await self._query(query) or []
 
@@ -223,7 +224,8 @@ class SanityClient:
         if tags:
             filters.append('count(tags[@ in $tags]) > 0')
         groq = f"""*[{' && '.join(filters)}] | order(_updatedAt desc) [0...$limit] {{
-            _id, name, description, steps, tags, toolsRequired, inputSchema, outputSchema
+            _id, name, description, steps, tags, toolsRequired, inputSchema, outputSchema,
+            playbook, references[]{{ name, content }}, source, ecosystemId, ecosystemInstalls
         }}"""
         params: dict[str, Any] = {"limit": limit}
         if query:
@@ -231,6 +233,143 @@ class SanityClient:
         if tags:
             params["tags"] = tags
         return await self._query(groq, params) or []
+
+    async def search_ecosystem_skills(self, query: str, limit: int = 10) -> list[dict[str, Any]]:
+        """Search the skills.sh open ecosystem for matching skills."""
+        import aiohttp
+        try:
+            url = f"https://skills.sh/api/search?q={query}"
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, headers={"Accept": "application/json"}, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                    if resp.status != 200:
+                        return []
+                    data = await resp.json()
+                    return (data.get("skills") or [])[:limit]
+        except Exception as exc:
+            logger.warning(f"Ecosystem skill search failed: {exc}")
+            return []
+
+    async def install_ecosystem_skill(self, eco_skill: dict[str, Any]) -> dict[str, Any] | None:
+        """Fetch a skill from GitHub and install it as a Sanity skill document."""
+        import aiohttp
+        import re
+
+        eco_id = eco_skill.get("id", "")
+        source = eco_skill.get("source", "")
+        installs = eco_skill.get("installs", 0)
+        name = eco_skill.get("name", "")
+
+        parts = eco_id.split("/")
+        skill_slug = parts[-1] if parts else ""
+        owner = parts[0] if parts else ""
+        repo = parts[1] if len(parts) >= 2 else ""
+
+        # Try common branch/path conventions
+        candidates = [
+            f"https://raw.githubusercontent.com/{owner}/{repo}/main/skills/{skill_slug}/SKILL.md",
+            f"https://raw.githubusercontent.com/{owner}/{repo}/master/skills/{skill_slug}/SKILL.md",
+            f"https://raw.githubusercontent.com/{owner}/{repo}/main/{skill_slug}/SKILL.md",
+        ]
+
+        raw_md = ""
+        async with aiohttp.ClientSession() as session:
+            for url in candidates:
+                try:
+                    async with session.get(url, timeout=aiohttp.ClientTimeout(total=10)) as resp:
+                        if resp.status == 200:
+                            raw_md = await resp.text()
+                            break
+                except Exception:
+                    continue
+
+        description = ""
+        tags: list[str] = []
+        steps: list[str] = []
+
+        if raw_md:
+            fm_match = re.search(r"^---\n([\s\S]*?)\n---", raw_md)
+            if fm_match:
+                fm = fm_match.group(1)
+                name_m = re.search(r"^name:\s*(.+)$", fm, re.M)
+                desc_m = re.search(r"^description:\s*(.+)$", fm, re.M)
+                if name_m:
+                    name = name_m.group(1).strip()
+                if desc_m:
+                    description = desc_m.group(1).strip()
+
+            steps_section = re.search(r"##\s*(?:Steps|How|Procedure|Process)\b[\s\S]*?(?=\n##|\n---|$)", raw_md, re.I)
+            if steps_section:
+                bullets = re.findall(r"^(?:\d+\.|[-*])\s+(.+)$", steps_section.group(0), re.M)
+                steps = [b.strip() for b in bullets]
+
+            tags_m = re.search(r"^tags:\s*\[([^\]]*)\]", raw_md, re.M)
+            if tags_m:
+                tags = [t.strip().strip("'\"") for t in tags_m.group(1).split(",") if t.strip()]
+
+            if not description:
+                body = re.sub(r"^---[\s\S]*?---", "", raw_md).strip()
+                first_para = re.search(r"^#[^\n]*\n+([^\n#].+)", body, re.M)
+                if first_para:
+                    description = first_para.group(1).strip()[:500]
+        else:
+            description = f"Ecosystem skill from {source} ({installs:,} installs)"
+
+        doc_id = re.sub(r"[^a-zA-Z0-9_-]", "-", f"skill-eco-{skill_slug}-{owner}")
+
+        doc = {
+            "_id": doc_id,
+            "_type": "skill",
+            "name": name,
+            "description": description,
+            "steps": steps if steps else None,
+            "tags": tags if tags else [skill_slug],
+            "source": "ecosystem",
+            "ecosystemId": eco_id,
+            "ecosystemInstalls": installs,
+            "enabled": True,
+        }
+        if raw_md:
+            doc["playbook"] = raw_md[:8000]
+
+        # ── Attempt to fetch reference files ──────────────────
+        references: list[dict[str, str]] = []
+        if raw_md:
+            # Extract reference file names from markdown links like [xxx](references/foo.md)
+            ref_links = re.findall(r"\[[^\]]*\]\(references/([^)]+\.md)\)", raw_md, re.I)
+            seen: set[str] = set()
+            for ref_file in ref_links:
+                if ref_file in seen:
+                    continue
+                seen.add(ref_file)
+                ref_candidates = [
+                    f"https://raw.githubusercontent.com/{owner}/{repo}/main/skills/{skill_slug}/references/{ref_file}",
+                    f"https://raw.githubusercontent.com/{owner}/{repo}/master/skills/{skill_slug}/references/{ref_file}",
+                    f"https://raw.githubusercontent.com/{owner}/{repo}/main/{skill_slug}/references/{ref_file}",
+                ]
+                async with aiohttp.ClientSession() as session:
+                    for ref_url in ref_candidates:
+                        try:
+                            async with session.get(ref_url, timeout=aiohttp.ClientTimeout(total=8)) as ref_resp:
+                                if ref_resp.status == 200:
+                                    ref_content = await ref_resp.text()
+                                    ref_name = ref_file.replace(".md", "").replace(".MD", "")
+                                    references.append({"name": ref_name, "content": ref_content[:8000]})
+                                    break
+                        except Exception:
+                            continue
+
+        if references:
+            doc["references"] = [
+                {"_key": f"ref-{i}", "name": r["name"], "content": r["content"]}
+                for i, r in enumerate(references)
+            ]
+
+        try:
+            await self._mutate([{"createOrReplace": doc}])
+            return doc
+        except Exception as exc:
+            logger.error(f"Failed to install ecosystem skill {eco_id}: {exc}")
+            return None
 
     async def get_all_credentials(self) -> list[dict[str, Any]]:
         """Fetch all credential documents (with all fields, for tool injection)."""

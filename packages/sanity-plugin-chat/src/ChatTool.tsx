@@ -55,6 +55,29 @@ interface SanityConversation {
 // Main tool component
 // =============================================================================
 
+// Read conversation ID from URL hash (e.g. #conv-abc123)
+function getConvIdFromHash(): string | null {
+  try {
+    const hash = window.location.hash.replace('#', '')
+    return hash && hash.startsWith('conv-') ? hash : null
+  } catch {
+    return null
+  }
+}
+
+// Write conversation ID to URL hash (enables shareable links)
+function setConvIdInHash(convId: string | null) {
+  try {
+    if (convId) {
+      window.history.replaceState(null, '', `#${convId}`)
+    } else {
+      window.history.replaceState(null, '', window.location.pathname + window.location.search)
+    }
+  } catch {
+    // Ignore if history API is unavailable
+  }
+}
+
 export function ChatTool() {
   const client = useClient({apiVersion: '2024-01-01'})
   const toast = useToast()
@@ -62,8 +85,18 @@ export function ChatTool() {
 
   // ── Conversation list state ──────────────────────────────────
   const [conversations, setConversations] = useState<SidebarConversation[]>([])
-  const [activeConvId, setActiveConvId] = useState<string | null>(null)
+  const [activeConvId, setActiveConvId] = useState<string | null>(getConvIdFromHash)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+
+  // Sync URL hash → state on browser back/forward
+  useEffect(() => {
+    const onHashChange = () => {
+      const id = getConvIdFromHash()
+      if (id !== activeConvId) setActiveConvId(id)
+    }
+    window.addEventListener('hashchange', onHashChange)
+    return () => window.removeEventListener('hashchange', onHashChange)
+  }, [activeConvId])
 
   // ── Fetch conversations directly from Sanity ─────────────────
   const fetchConversations = useCallback(async () => {
@@ -165,6 +198,7 @@ export function ChatTool() {
     try {
       const convId = await createConversation('New Conversation')
       setActiveConvId(convId)
+      setConvIdInHash(convId)
       fetchConversations()
     } catch (err) {
       console.error('Failed to create conversation:', err)
@@ -174,12 +208,16 @@ export function ChatTool() {
 
   const handleSelectConversation = useCallback((id: string) => {
     setActiveConvId(id)
+    setConvIdInHash(id)
   }, [])
 
   const handleDeleteConversation = useCallback(
     async (id: string) => {
       setConversations((prev) => prev.filter((c) => c.id !== id))
-      if (activeConvId === id) setActiveConvId(null)
+      if (activeConvId === id) {
+        setActiveConvId(null)
+        setConvIdInHash(null)
+      }
       try {
         await deleteConversation(id)
       } catch (err) {
@@ -198,6 +236,7 @@ export function ChatTool() {
         try {
           const convId = await createConversation(content.slice(0, 80))
           setActiveConvId(convId)
+          setConvIdInHash(convId)
           fetchConversations()
           // Give the WS a moment to connect before sending
           setTimeout(() => sendMessage(content, attachments), 500)

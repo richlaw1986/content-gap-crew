@@ -247,8 +247,13 @@ export async function* runCrew(
   // Track task outputs for context chaining
   let previousOutput = "";
   let finalOutput = "";
-  // Track the last substantive (non-reviewer) output — this is what the user sees as the final answer
-  let lastSubstantiveOutput = "";
+  // Collect all non-reviewer outputs and the reviewer's feedback separately.
+  // After all tasks, the lead agent runs a final synthesis pass to produce
+  // ONE unified deliverable that incorporates every agent's contribution
+  // and addresses the reviewer's QA notes.
+  const substantiveOutputs: { agent: string; output: string }[] = [];
+  let reviewerFeedback = "";
+  let leadAgentConfig: AgentConfig | null = null;
 
   for (let i = 0; i < sortedTasks.length; i++) {
     const task = sortedTasks[i];
@@ -355,12 +360,15 @@ export async function* runCrew(
 
       previousOutput = output;
 
-      // Only non-reviewer output counts as the final deliverable.
-      // The reviewer's feedback is shown in the chat but should never
-      // replace the substantive agent's work as the final answer.
-      if (!reviewer) {
-        lastSubstantiveOutput = output;
-        finalOutput = output;
+      // Track outputs by role for the final synthesis step.
+      if (reviewer) {
+        reviewerFeedback += (reviewerFeedback ? "\n\n" : "") + output;
+      } else {
+        substantiveOutputs.push({ agent: agentName, output });
+        // The first substantive agent is the "lead" who will do the synthesis
+        if (!leadAgentConfig) {
+          leadAgentConfig = agentConfig;
+        }
       }
 
       // Emit the agent's response
@@ -380,17 +388,111 @@ export async function* runCrew(
     }
   }
 
-  // If we have no finalOutput (e.g. all tasks were reviewer tasks),
-  // fall back to whatever we got last
-  if (!finalOutput) {
-    finalOutput = lastSubstantiveOutput || previousOutput || "No output produced.";
-  }
+  // ── Synthesis decision ───────────────────────────────────────
+  // If multiple agents contributed (or a reviewer flagged issues),
+  // hand the raw materials to the conversation handler so it can
+  // ask the user before synthesizing.  For simple single-agent runs
+  // we just complete directly.
+  const objectiveStr =
+    (inputs.objective as string) || (inputs.topic as string) || "";
 
-  // Emit completion
-  yield {
-    event: "complete",
-    runId: "run-placeholder",
-    finalOutput,
-    timestamp: now(),
-  };
+  const needsSynthesis =
+    substantiveOutputs.length > 1 ||
+    (substantiveOutputs.length === 1 && reviewerFeedback);
+
+  if (!needsSynthesis) {
+    // Single agent, no reviewer — complete directly
+    finalOutput = substantiveOutputs[0]?.output || previousOutput || "No output produced.";
+    yield {
+      event: "complete",
+      runId: "run-placeholder",
+      finalOutput,
+      timestamp: now(),
+    };
+  } else {
+    // Hand off to conversation handler for optional user confirmation
+    yield {
+      event: "synthesis_ready",
+      substantiveOutputs,
+      reviewerFeedback,
+      leadAgentName: leadAgentConfig?.name || "Lead Agent",
+      leadAgentModel: leadAgentConfig?.llmModel,
+      objective: objectiveStr,
+      timestamp: now(),
+    };
+  }
+}
+
+// ─── Standalone synthesis (called by conversation handler) ────
+
+export interface SynthesisInput {
+  substantiveOutputs: { agent: string; output: string }[];
+  reviewerFeedback: string;
+  leadAgentName: string;
+  leadAgentModel?: string;
+  objective: string;
+}
+
+/**
+ * Synthesize multiple agent outputs into a single unified deliverable.
+ *
+ * Called by the conversation handler AFTER the user confirms they want
+ * to proceed (or immediately when there's no reviewer feedback to discuss).
+ */
+export async function synthesizeOutputs(
+  input: SynthesisInput
+): Promise<string> {
+  const { substantiveOutputs, reviewerFeedback, leadAgentName, leadAgentModel, objective } = input;
+
+  // Build a tool-free agent for synthesis — no tool calls, just text generation.
+  const synthesisAgent = new Agent({
+    name: leadAgentName,
+    instructions:
+      `You are a senior synthesizer. Your ONLY job is to merge multiple team ` +
+      `contributions into one seamless document. You produce the final document ` +
+      `immediately using only the material provided. You never ask for more ` +
+      `information — you work with what you have.`,
+    model: getModel(leadAgentModel),
+    tools: {},
+  });
+
+  const contributionsBlock = substantiveOutputs
+    .map((s) => `--- ${s.agent} ---\n${s.output}`)
+    .join("\n\n");
+
+  const reviewerBlock = reviewerFeedback
+    ? `\n\nQA REVIEWER FEEDBACK (address these in your final version):\n${reviewerFeedback}`
+    : "";
+
+  const synthesisPrompt = [
+    `You are producing the FINAL DELIVERABLE for the user.`,
+    ``,
+    `USER'S ORIGINAL REQUEST: ${objective}`,
+    ``,
+    `Multiple team members have contributed their work below.`,
+    `Your job is to synthesize ALL of their contributions into ONE cohesive, unified output.`,
+    ``,
+    `RULES:`,
+    `- Produce the final document NOW. Do not ask for more data or URLs.`,
+    `- Do NOT list contributions by agent name or separate sections per agent.`,
+    `- Produce a SINGLE polished document that seamlessly integrates all insights.`,
+    `- If the QA reviewer raised valid issues, address them where possible using the existing evidence.`,
+    `- If contributions overlap, merge and deduplicate — keep the strongest version of each point.`,
+    `- Maintain the depth and specificity of the original contributions — do not summarize or water down.`,
+    `- Match the format the user would expect (e.g. a full audit document, complete code files, etc).`,
+    `- Where evidence was limited, note it briefly as a caveat inline (e.g. "[not verified — needs PSI check]").`,
+    `- Do NOT include preamble like "Here is the synthesized..." — start with the content directly.`,
+    ``,
+    `TEAM CONTRIBUTIONS:`,
+    contributionsBlock,
+    reviewerBlock,
+  ].join("\n");
+
+  const result = await synthesisAgent.generate(synthesisPrompt, {
+    maxSteps: 1,
+  });
+
+  return typeof result === "string"
+    ? result
+    : (result as any)?.text ?? String(result);
 }

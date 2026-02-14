@@ -851,11 +851,26 @@ class CrewRunner:
                 {
                     "name": t.get("name", f"Task {i+1}"),
                     "agent_id": (t.get("agent") or {}).get("_id", ""),
+                    "is_reviewer": bool(
+                        _re.search(r"review|qa|quality", t.get("name", ""), _re.I)
+                        or _re.search(
+                            r"review|qa|quality",
+                            agent_name_by_id.get((t.get("agent") or {}).get("_id", ""), ""),
+                            _re.I,
+                        )
+                    ),
                 }
                 for i, t in enumerate(_raw_tasks)
                 # Skip memory tasks from the stage display
                 if t.get("name") != "Memory Summary"
             ]
+
+            # Collect all agent outputs during streaming, split by role.
+            # After all tasks, the lead agent does a synthesis pass to produce
+            # ONE unified deliverable from all contributions.
+            _substantive_outputs: list[tuple[str, str]] = []  # (agent_name, content)
+            _reviewer_feedback: str = ""
+            _lead_agent_config: dict[str, Any] | None = None
 
             def _resolve_agent() -> str:
                 """Best-effort agent name for the current context.
@@ -1003,16 +1018,42 @@ class CrewRunner:
                             content_hash = hash(content)
                             if content_hash not in emitted_hashes:
                                 emitted_hashes.add(content_hash)
+                                agent_label = _resolve_agent()
                                 stream_event = {
                                     "event": "agent_message",
                                     "type": "message",
-                                    "agent": _resolve_agent(),
+                                    "agent": agent_label,
                                     "content": content,
                                     "timestamp": datetime.now(timezone.utc).isoformat(),
                                 }
                                 if on_event:
                                     on_event(stream_event)
                                 yield stream_event
+
+                                # Track outputs by role for the synthesis step.
+                                current_task_idx = min(
+                                    task_index - 1 if task_index > 0 else 0,
+                                    len(task_info_list) - 1,
+                                )
+                                if current_task_idx >= 0 and task_info_list:
+                                    is_rev = task_info_list[current_task_idx].get("is_reviewer", False)
+                                else:
+                                    is_rev = bool(_re.search(r"review|qa|quality", agent_label, _re.I))
+                                if is_rev:
+                                    _reviewer_feedback += ("\n\n" if _reviewer_feedback else "") + content
+                                else:
+                                    _substantive_outputs.append((agent_label, content))
+                                    if _lead_agent_config is None:
+                                        # First substantive agent → lead
+                                        aid = ""
+                                        if current_task_idx >= 0 and task_info_list:
+                                            aid = task_info_list[current_task_idx].get("agent_id", "")
+                                        for ag in self.config.agents:
+                                            ad = ag.model_dump(by_alias=True)
+                                            if ad.get("_id") == aid or (ad.get("name") or ad.get("role", "")) == agent_label:
+                                                _lead_agent_config = ad
+                                                break
+
                             final_lines = []
                         continue
 
@@ -1030,16 +1071,41 @@ class CrewRunner:
                 content_hash = hash(content)
                 if content_hash not in emitted_hashes:
                     emitted_hashes.add(content_hash)
+                    agent_label = _resolve_agent()
                     stream_event = {
                         "event": "agent_message",
                         "type": "message",
-                        "agent": _resolve_agent(),
+                        "agent": agent_label,
                         "content": content,
                         "timestamp": datetime.now(timezone.utc).isoformat(),
                     }
                     if on_event:
                         on_event(stream_event)
                     yield stream_event
+
+                    # Track outputs by role for synthesis
+                    last_idx = min(
+                        task_index - 1 if task_index > 0 else 0,
+                        len(task_info_list) - 1,
+                    )
+                    if last_idx >= 0 and task_info_list:
+                        is_rev = task_info_list[last_idx].get("is_reviewer", False)
+                    else:
+                        is_rev = bool(_re.search(r"review|qa|quality", agent_label, _re.I))
+                    if is_rev:
+                        _reviewer_feedback += ("\n\n" if _reviewer_feedback else "") + content
+                    else:
+                        _substantive_outputs.append((agent_label, content))
+                        if _lead_agent_config is None:
+                            aid = ""
+                            if last_idx >= 0 and task_info_list:
+                                aid = task_info_list[last_idx].get("agent_id", "")
+                            for ag in self.config.agents:
+                                ad = ag.model_dump(by_alias=True)
+                                if ad.get("_id") == aid or (ad.get("name") or ad.get("role", "")) == agent_label:
+                                    _lead_agent_config = ad
+                                    break
+
                 final_lines = []
 
             result = await kickoff_future
@@ -1048,18 +1114,52 @@ class CrewRunner:
             # during the streaming loop above (via "Final Answer:" parsing),
             # so we skip re-emitting them here to avoid duplicates.
 
-            # Emit the overall crew result + completion event
-            final_output = str(result)
+            # ── Synthesis decision ─────────────────────────────
+            # If multiple agents contributed (or a reviewer flagged
+            # issues), hand the raw materials to the conversation
+            # handler so it can ask the user before synthesizing.
+            need_synthesis = (
+                len(_substantive_outputs) > 1
+                or (len(_substantive_outputs) == 1 and _reviewer_feedback)
+            )
 
-            complete_event = {
-                "event": "complete",
-                "runId": "run-placeholder",  # Will be set by caller
-                "finalOutput": final_output,
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-            }
-            if on_event:
-                on_event(complete_event)
-            yield complete_event
+            if not need_synthesis:
+                # Single agent, no reviewer → complete directly
+                final_output = (
+                    _substantive_outputs[0][1] if _substantive_outputs else str(result)
+                )
+                complete_event = {
+                    "event": "complete",
+                    "runId": "run-placeholder",
+                    "finalOutput": final_output,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                }
+                if on_event:
+                    on_event(complete_event)
+                yield complete_event
+            else:
+                # Hand off to conversation handler for user confirmation
+                lead_name = ""
+                lead_model = None
+                if _lead_agent_config:
+                    lead_name = _lead_agent_config.get("name") or _lead_agent_config.get("role", "Lead Agent")
+                    lead_model = _lead_agent_config.get("llmModel")
+
+                synth_ready = {
+                    "event": "synthesis_ready",
+                    "substantiveOutputs": [
+                        {"agent": name, "output": text}
+                        for name, text in _substantive_outputs
+                    ],
+                    "reviewerFeedback": _reviewer_feedback,
+                    "leadAgentName": lead_name or "Lead Agent",
+                    "leadAgentModel": lead_model,
+                    "objective": objective,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                }
+                if on_event:
+                    on_event(synth_ready)
+                yield synth_ready
             
         except Exception as e:
             error_event = {

@@ -28,14 +28,17 @@ import {
   getAllCredentials,
   listAllSkills,
   searchSkills,
+  searchEcosystemSkills,
+  installEcosystemSkill,
   createRun,
   updateRunStatus,
   addRunToConversation,
   type AgentConfig,
   type SkillConfig,
+  type EcosystemSkillResult,
 } from "../sanity.js";
 import { planCrew } from "./planner.js";
-import { runCrew, type RunEvent, type RunnerConfig } from "./runner.js";
+import { runCrew, synthesizeOutputs, type RunEvent, type RunnerConfig, type SynthesisInput } from "./runner.js";
 
 // ─── Helpers ──────────────────────────────────────────────────
 
@@ -366,22 +369,38 @@ export async function handleConversationWs(
   let activeCrewAgents: AgentConfig[] = [];
 
   // ── Restore agent state from conversation history ────────────
-  // If this conversation already had a completed run, restore leadAgentConfig
-  // and activeCrewAgents so follow-up messages go to the reply path (with tools)
-  // instead of triggering a whole new crew selection + planning flow.
+  // If this conversation already had a run (completed OR in-progress), restore
+  // leadAgentConfig and activeCrewAgents so follow-up messages go to the reply
+  // path instead of triggering a whole new crew selection + planning flow.
   const hasCompletedRun = existingMessages.some(
     (m) => (m.type as string) === "complete"
   );
-  if (hasCompletedRun) {
+  // Also detect in-progress runs: if we see planning/crew-assembly system
+  // messages or agent activity, a run was already started — don't re-ask.
+  const hadAnyRunActivity = existingMessages.some((m) => {
+    const mType = (m.type as string) || "";
+    const content = (m.content as string) || "";
+    const sender = (m.sender as string) || "";
+    // Agent messages (persisted as "agent_message" or "message" with agent sender)
+    if (
+      (mType === "agent_message" || mType === "message") &&
+      sender && sender !== "user" && sender !== "system"
+    ) return true;
+    // System messages indicating planning happened
+    if (mType === "system" && /Planning your workflow|Crew assembled/i.test(content)) return true;
+    return false;
+  });
+
+  if (hasCompletedRun || hadAnyRunActivity) {
     // Collect unique agent names from previous messages
     const agentSenders = new Set<string>();
     let firstAgentSender: string | null = null;
     for (const m of existingMessages) {
       const sender = (m.sender as string) || "";
       const mType = (m.type as string) || "";
-      // Agent messages have type "message" with a non-"user"/"system" sender
+      // Agent messages can be persisted as "message" or "agent_message"
       if (
-        mType === "message" &&
+        (mType === "message" || mType === "agent_message") &&
         sender &&
         sender !== "user" &&
         sender !== "system"
@@ -415,6 +434,24 @@ export async function handleConversationWs(
         }
       } catch (e: any) {
         console.warn(`Failed to restore agent state: ${e.message}`);
+      }
+    }
+
+    // Even if we couldn't match specific agents (e.g. they were deleted),
+    // the fact that a run was started means we should NOT re-ask crew/skills.
+    // Fallback: pick the first available agent as lead.
+    if (!leadAgentConfig && (hasCompletedRun || hadAnyRunActivity)) {
+      try {
+        const allAgents = await listAgentsFull();
+        if (allAgents.length) {
+          leadAgentConfig = allAgents[0];
+          activeCrewAgents = allAgents.slice(0, 1);
+          console.log(
+            `Fallback agent state for conversation ${conversationId}: lead=${leadAgentConfig.name}`
+          );
+        }
+      } catch {
+        // ignore
       }
     }
   }
@@ -703,63 +740,147 @@ export async function handleConversationWs(
       }
     }
 
-    // ── Skill selection ─────────────────────────────────────
-    const allSkills = await listAllSkills();
+    // ── Skill selection (local + ecosystem) ─────────────────
+    const allLocalSkills = await listAllSkills();
     let selectedSkills: SkillConfig[] = [];
 
-    if (allSkills.length) {
-      const keywords = objective.split(/\s+/).slice(0, 5).join(" ");
-      const searchedSkills = await searchSkills(keywords, undefined, 10);
+    // Search local skills + the open skills.sh ecosystem in parallel
+    const keywords = objective.split(/\s+/).slice(0, 5).join(" ");
+    const [searchedLocal, ecosystemResults] = await Promise.all([
+      searchSkills(keywords, undefined, 10),
+      searchEcosystemSkills(keywords, 8),
+    ]);
 
-      const seenIds = new Set<string>();
-      const merged = [...searchedSkills, ...allSkills].filter((s) => {
-        if (seenIds.has(s._id)) return false;
-        seenIds.add(s._id);
-        return true;
+    // Deduplicate local skills
+    const seenIds = new Set<string>();
+    const mergedLocal = [...searchedLocal, ...allLocalSkills].filter((s) => {
+      if (seenIds.has(s._id)) return false;
+      seenIds.add(s._id);
+      return true;
+    });
+
+    // Filter out ecosystem skills that are already installed locally
+    const installedEcoIds = new Set(
+      mergedLocal.filter((s) => s.ecosystemId).map((s) => s.ecosystemId)
+    );
+    const newEcosystem = ecosystemResults.filter(
+      (es) => !installedEcoIds.has(es.id)
+    );
+
+    // Build a combined options list with source labels
+    type SkillOption = {
+      value: string;
+      label: string;
+      description: string;
+    };
+    const skillOptions: SkillOption[] = [];
+
+    // Local skills first
+    for (const s of mergedLocal) {
+      skillOptions.push({
+        value: s._id,
+        label: `📁 ${s.name}`,
+        description: `[Local] ${(s.description || "").slice(0, 100)}`,
+      });
+    }
+
+    // Then ecosystem skills
+    for (const es of newEcosystem) {
+      skillOptions.push({
+        value: `__eco__:${es.id}`,
+        label: `🌐 ${es.name}`,
+        description: `[Ecosystem · ${es.installs.toLocaleString()} installs] ${es.source}`,
+      });
+    }
+
+    if (skillOptions.length) {
+      skillOptions.push({
+        value: "__none__",
+        label: "None — skip skills",
+        description: "Proceed without applying any predefined skill playbooks",
       });
 
-      if (merged.length) {
-        const skillOptions = [
-          ...merged.map((s) => ({
-            value: s._id,
-            label: s.name,
-            description: (s.description || "").slice(0, 120),
-          })),
-          {
-            value: "__none__",
-            label: "None — skip skills",
-            description: "Proceed without applying any predefined skill playbooks",
-          },
-        ];
+      const skillAnswer = await askUser(
+        "Found skill playbooks (local + ecosystem). Select any to apply (or skip):",
+        { options: skillOptions, selectionType: "checkbox" }
+      );
 
-        const skillAnswer = await askUser(
-          "Found skill playbooks that may be useful. Select any to apply (or skip):",
-          { options: skillOptions, selectionType: "checkbox" }
-        );
-
-        if (skillAnswer.trim() !== "__none__") {
-          let pickedIds: Set<string>;
-          try {
-            const parsed = JSON.parse(skillAnswer);
-            pickedIds = new Set(Array.isArray(parsed) ? parsed : [String(parsed)]);
-          } catch {
-            pickedIds = new Set(
-              skillAnswer.split(",").map((s) => s.trim()).filter(Boolean)
-            );
-          }
-          pickedIds.delete("__none__");
-          selectedSkills = merged.filter((s) => pickedIds.has(s._id));
+      if (skillAnswer.trim() !== "__none__") {
+        let pickedIds: Set<string>;
+        try {
+          const parsed = JSON.parse(skillAnswer);
+          pickedIds = new Set(Array.isArray(parsed) ? parsed : [String(parsed)]);
+        } catch {
+          pickedIds = new Set(
+            skillAnswer.split(",").map((s) => s.trim()).filter(Boolean)
+          );
         }
+        pickedIds.delete("__none__");
+
+        // Separate local vs ecosystem picks
+        const localPicks = new Set<string>();
+        const ecoPicks: EcosystemSkillResult[] = [];
+        for (const id of pickedIds) {
+          if (id.startsWith("__eco__:")) {
+            const ecoId = id.replace("__eco__:", "");
+            const match = newEcosystem.find((e) => e.id === ecoId);
+            if (match) ecoPicks.push(match);
+          } else {
+            localPicks.add(id);
+          }
+        }
+
+        // Install selected ecosystem skills into Sanity
+        if (ecoPicks.length) {
+          send({
+            type: "system",
+            content: `Installing ${ecoPicks.length} ecosystem skill(s)...`,
+            timestamp: _now(),
+          });
+          for (const eco of ecoPicks) {
+            const installed = await installEcosystemSkill(eco);
+            if (installed) {
+              selectedSkills.push(installed);
+              send({
+                type: "system",
+                content: `✓ Installed "${installed.name}" from skills.sh`,
+                timestamp: _now(),
+              });
+            }
+          }
+        }
+
+        // Add local picks
+        const localSelected = mergedLocal.filter((s) => localPicks.has(s._id));
+        selectedSkills.push(...localSelected);
       }
     }
 
-    // Inject skill context
+    // Inject skill context — structured fields first, then full playbook + references
     if (selectedSkills.length) {
       let skillBlock = "\n\nSKILL PLAYBOOKS TO FOLLOW:\n";
       for (const sk of selectedSkills) {
+        const srcLabel = sk.source === "ecosystem" ? " [ecosystem]" : " [local]";
         const steps = sk.steps as string[] | undefined;
         const stepsText = steps?.length ? `\n  Steps: ${steps.join(" → ")}` : "";
-        skillBlock += `- ${sk.name}: ${sk.description || ""}${stepsText}\n`;
+        const tools = sk.toolsRequired as string[] | undefined;
+        const toolsText = tools?.length ? `\n  Tools to use: ${tools.join(", ")}` : "";
+        const outputText = sk.outputSchema ? `\n  Expected output: ${sk.outputSchema}` : "";
+        // Include the full playbook (Markdown) for richer context when available
+        const playbookContent = sk.playbook
+          ? `\n  Full playbook:\n${sk.playbook.slice(0, 4000)}`
+          : "";
+        // Include reference files (brand scripts, personas, etc.)
+        let refsContent = "";
+        const refs = sk.references as Array<{ name: string; content: string }> | undefined;
+        if (refs?.length) {
+          refsContent = "\n  Reference materials:";
+          for (const ref of refs) {
+            const truncated = ref.content.slice(0, 3000);
+            refsContent += `\n  --- ${ref.name} ---\n${truncated}`;
+          }
+        }
+        skillBlock += `- ${sk.name}${srcLabel}: ${sk.description || ""}${stepsText}${toolsText}${outputText}${playbookContent}${refsContent}\n`;
       }
       enrichedObjective += skillBlock;
     }
@@ -905,6 +1026,173 @@ export async function handleConversationWs(
               },
               timestamp: event.timestamp || _now(),
             });
+          }
+        } else if (evtType === "synthesis_ready") {
+          // ── Interactive synthesis ─────────────────────────
+          // The runner collected multiple agent outputs and/or
+          // reviewer feedback. Ask the user before synthesizing.
+          const synthData = event as unknown as {
+            substantiveOutputs: { agent: string; output: string }[];
+            reviewerFeedback: string;
+            leadAgentName: string;
+            leadAgentModel?: string;
+            objective: string;
+          };
+
+          const hasReviewerIssues = !!(
+            synthData.reviewerFeedback &&
+            /revise|missing|insufficient|incomplete|needs?\s+(revision|improvement|verification|more)/i
+              .test(synthData.reviewerFeedback)
+          );
+
+          // If reviewer flagged issues, ask the user before proceeding
+          if (hasReviewerIssues) {
+            const answer = await askUser(
+              "The reviewer flagged some gaps in the work — mainly due to limited tool access. " +
+              "Produce the final output with available evidence, or would you like to provide additional information first?",
+              {
+                options: [
+                  {
+                    value: "proceed",
+                    label: "Proceed with available evidence",
+                    description: "Synthesize a final deliverable using what the agents gathered",
+                  },
+                  {
+                    value: "provide_more",
+                    label: "Let me provide more information first",
+                    description: "Send additional context before generating the final output",
+                  },
+                ],
+                selectionType: "radio",
+              }
+            );
+
+            // If user wants to provide more info, skip synthesis and
+            // let them send follow-up messages naturally.
+            if (
+              answer === "provide_more" ||
+              (answer && /more info|provide|address|first/i.test(answer))
+            ) {
+              send({
+                type: "system",
+                sender: "system",
+                content:
+                  "OK — send the additional information and I'll incorporate it into the final output.",
+                timestamp: _now(),
+              });
+              await appendMessage(conversationId, {
+                _key: _msgKey(),
+                sender: "system",
+                type: "system",
+                content:
+                  "OK — send the additional information and I'll incorporate it into the final output.",
+                timestamp: _now(),
+              });
+              // Mark run as completed with the lead agent's raw output
+              // as a fallback. The user can trigger a new run later.
+              const fallbackOutput =
+                synthData.substantiveOutputs[0]?.output || "No output produced.";
+              await updateRunStatus(runId, "completed", {
+                completedAt: _now(),
+                output: fallbackOutput,
+              });
+              // Skip to the end — don't synthesize
+              continue;
+            }
+          }
+
+          // ── Run synthesis ─────────────────────────────────
+          send({
+            type: "thinking",
+            sender: synthData.leadAgentName,
+            content: "Synthesizing final deliverable...",
+            timestamp: _now(),
+          });
+          await appendMessage(conversationId, {
+            _key: _msgKey(),
+            sender: synthData.leadAgentName,
+            type: "thinking",
+            content: "Synthesizing final deliverable...",
+            timestamp: _now(),
+          });
+
+          let output: string;
+          try {
+            output = await synthesizeOutputs({
+              substantiveOutputs: synthData.substantiveOutputs,
+              reviewerFeedback: synthData.reviewerFeedback,
+              leadAgentName: synthData.leadAgentName,
+              leadAgentModel: synthData.leadAgentModel,
+              objective: synthData.objective,
+            });
+          } catch (synthErr: any) {
+            console.error("[conversation] Synthesis failed:", synthErr.message);
+            // Fall back to lead agent's raw output
+            output =
+              synthData.substantiveOutputs[0]?.output || "No output produced.";
+          }
+
+          // Emit synthesized message
+          send({
+            type: "message",
+            sender: synthData.leadAgentName,
+            content: output,
+            timestamp: _now(),
+          });
+          await appendMessage(conversationId, {
+            _key: _msgKey(),
+            sender: synthData.leadAgentName,
+            type: "message",
+            content: output,
+            timestamp: _now(),
+          });
+
+          // Now emit completion
+          await updateRunStatus(runId, "completed", {
+            completedAt: _now(),
+            output,
+          });
+          send({
+            type: "complete",
+            runId,
+            output,
+            timestamp: _now(),
+          });
+          await appendMessage(conversationId, {
+            _key: _msgKey(),
+            sender: "system",
+            type: "complete",
+            content: output.length > 200 ? output.slice(0, 200) + "…" : output,
+            metadata: { runId, output },
+            timestamp: _now(),
+          });
+          await appendMessage(conversationId, {
+            _key: _msgKey(),
+            sender: "system",
+            type: "system",
+            content: "Run completed.",
+            metadata: { runId },
+            timestamp: _now(),
+          });
+
+          // Generate run summary
+          try {
+            const conv2 = await getConversation(conversationId);
+            const convMsgs2 = ((conv2?.messages as any[]) || []) as Array<
+              Record<string, unknown>
+            >;
+            const memModel2 = memoryPolicy?.agent?.llmModel;
+            const summary2 = await generateRunSummary(
+              objective,
+              output,
+              convMsgs2,
+              memModel2
+            );
+            if (summary2) {
+              await updateConversationSummary(conversationId, summary2);
+            }
+          } catch (e: any) {
+            console.warn(`Non-critical: failed to generate run summary: ${e.message}`);
           }
         } else if (evtType === "complete") {
           const output = event.finalOutput || "";

@@ -213,6 +213,52 @@ async def list_conversations(request: Request, limit: int = 50) -> list[dict[str
     return await sanity.list_conversations(limit=limit)
 
 
+async def _synthesize_outputs(
+    runner: "CrewRunner",
+    sub_outputs: list[dict[str, str]],
+    reviewer_feedback: str,
+    lead_name: str,
+    lead_model: str | None,
+    synth_objective: str,
+) -> str:
+    """Synthesize multiple agent outputs into one cohesive deliverable.
+
+    Uses the runner's ``_get_llm()`` helper so the same model resolution
+    logic (Anthropic/OpenAI) applies.
+    """
+    contributions = "\n\n".join(
+        f"--- {o['agent']} ---\n{o['output']}" for o in sub_outputs
+    )
+    reviewer_block = (
+        f"\n\nQA REVIEWER FEEDBACK (address these in your final version):\n{reviewer_feedback}"
+        if reviewer_feedback
+        else ""
+    )
+    prompt = (
+        "You are producing the FINAL DELIVERABLE for the user.\n\n"
+        f"USER'S ORIGINAL REQUEST: {synth_objective}\n\n"
+        "Multiple team members have contributed their work below.\n"
+        "Your job is to synthesize ALL of their contributions into ONE cohesive, unified output.\n\n"
+        "RULES:\n"
+        "- Produce the final document NOW. Do not ask for more data or URLs.\n"
+        "- Do NOT list contributions by agent name or separate sections per agent.\n"
+        "- Produce a SINGLE polished document that seamlessly integrates all insights.\n"
+        "- If the QA reviewer raised valid issues, address them where possible using the existing evidence.\n"
+        "- If contributions overlap, merge and deduplicate — keep the strongest version of each point.\n"
+        "- Maintain the depth and specificity of the original contributions — do not summarize or water down.\n"
+        "- Match the format the user would expect (e.g. a full audit document, complete code files, etc).\n"
+        "- Where evidence was limited, note it briefly as a caveat inline (e.g. '[not verified — needs PSI check]').\n"
+        "- Do NOT include preamble like 'Here is the synthesized...' — start with the content directly.\n\n"
+        f"TEAM CONTRIBUTIONS:\n{contributions}"
+        f"{reviewer_block}"
+    )
+
+    llm = runner._get_llm(lead_model)
+    loop = asyncio.get_event_loop()
+    result = await loop.run_in_executor(None, lambda: llm.invoke(prompt))
+    return result.content if hasattr(result, "content") else str(result)
+
+
 @router.post("")
 async def create_conversation(body: CreateConversationRequest, request: Request) -> dict[str, Any]:
     """Create a new conversation."""
@@ -347,16 +393,31 @@ async def conversation_ws(websocket: WebSocket, conversation_id: str):
     active_crew_agents: list[dict[str, Any]] = []      # all agents in the current crew
 
     # ── Restore agent state from conversation history ────────────
-    # If this conversation already had a completed run, restore lead_agent_config
-    # and active_crew_agents so follow-up messages go to the reply path
-    # instead of triggering a whole new crew selection + planning flow.
+    # If this conversation already had a run (completed OR in-progress), restore
+    # lead_agent_config and active_crew_agents so follow-up messages go to the
+    # reply path instead of triggering a whole new crew selection + planning flow.
     has_completed_run = any(m.get("type") == "complete" for m in existing_messages)
-    if has_completed_run:
+    # Also detect in-progress runs: if we see planning/crew-assembly system
+    # messages or agent activity, a run was already started — don't re-ask.
+    had_any_run_activity = False
+    for m in existing_messages:
+        mt = m.get("type", "")
+        ms = m.get("sender", "")
+        mc = m.get("content", "")
+        if mt in ("agent_message", "message") and ms and ms not in ("user", "system"):
+            had_any_run_activity = True
+            break
+        if mt == "system" and ("Planning your workflow" in mc or "Crew assembled" in mc):
+            had_any_run_activity = True
+            break
+
+    if has_completed_run or had_any_run_activity:
         agent_senders: list[str] = []
         for m in existing_messages:
             s = m.get("sender", "")
             t = m.get("type", "")
-            if t == "message" and s and s not in ("user", "system"):
+            # Agent messages can be persisted as "message" or "agent_message"
+            if t in ("message", "agent_message") and s and s not in ("user", "system"):
                 if s not in agent_senders:
                     agent_senders.append(s)
 
@@ -382,6 +443,23 @@ async def conversation_ws(websocket: WebSocket, conversation_id: str):
                     )
             except Exception as exc:
                 logger.warning("Failed to restore agent state: %s", exc)
+
+        # Even if we couldn't match specific agents (e.g. they were deleted),
+        # the fact that a run was started means we should NOT re-ask crew/skills.
+        # Fallback: pick the first available agent as lead.
+        if not lead_agent_config and (has_completed_run or had_any_run_activity):
+            try:
+                all_agents_fallback = await sanity.list_agents_full()
+                if all_agents_fallback:
+                    lead_agent_config = all_agents_fallback[0]
+                    active_crew_agents = [all_agents_fallback[0]]
+                    logger.info(
+                        "Fallback agent state for conversation %s: lead=%s",
+                        conversation_id,
+                        lead_agent_config.get("name"),
+                    )
+            except Exception:
+                pass
 
     # Mutable reference for the send callback — allows detaching when WS closes
     # while the run continues in the background.
@@ -718,63 +796,113 @@ async def conversation_ws(websocket: WebSocket, conversation_id: str):
                 if any(c["_id"] == crew_answer for c in available_crews):
                     selected_crew_id = crew_answer
 
-        # ── Step 2: Skill selection ───────────────────────────
-        # Search for skills relevant to the objective and let the
-        # user pick which ones (if any) to apply.
-        all_skills = await sanity.list_all_skills()
+        # ── Step 2: Skill selection (local + ecosystem) ────────
+        # Search local Sanity skills AND the open skills.sh ecosystem
+        # in parallel, then present a merged list with source badges.
+        all_local_skills = await sanity.list_all_skills()
         selected_skills: list[dict[str, Any]] = []
 
-        if all_skills:
-            # Also try a keyword search for more relevant results
-            keywords = objective.split()[:5]
-            keyword_str = " ".join(keywords)
-            searched_skills = await sanity.search_skills(query=keyword_str, limit=10)
-            # Merge and deduplicate
-            seen_ids = set()
-            merged_skills = []
-            for s in (searched_skills + all_skills):
-                if s["_id"] not in seen_ids:
-                    seen_ids.add(s["_id"])
-                    merged_skills.append(s)
+        keywords = " ".join(objective.split()[:5])
+        searched_local, ecosystem_results = await asyncio.gather(
+            sanity.search_skills(query=keywords, limit=10),
+            sanity.search_ecosystem_skills(keywords, limit=8),
+        )
 
-            if merged_skills:
-                skill_options = [
-                    {
-                        "value": s["_id"],
-                        "label": s["name"],
-                        "description": (s.get("description") or "")[:120],
-                    }
-                    for s in merged_skills
-                ]
-                skill_options.append({
-                    "value": "__none__",
-                    "label": "None — skip skills",
-                    "description": "Proceed without applying any predefined skill playbooks",
-                })
+        # Deduplicate local skills
+        seen_ids: set[str] = set()
+        merged_local: list[dict[str, Any]] = []
+        for s in (searched_local + all_local_skills):
+            if s["_id"] not in seen_ids:
+                seen_ids.add(s["_id"])
+                merged_local.append(s)
 
+        # Filter out ecosystem skills already installed locally
+        installed_eco_ids = {
+            s.get("ecosystemId") for s in merged_local if s.get("ecosystemId")
+        }
+        new_ecosystem = [
+            es for es in ecosystem_results if es.get("id") not in installed_eco_ids
+        ]
+
+        # Build combined option list with source labels
+        skill_options: list[dict[str, str]] = []
+
+        for s in merged_local:
+            skill_options.append({
+                "value": s["_id"],
+                "label": f"📁 {s['name']}",
+                "description": f"[Local] {(s.get('description') or '')[:100]}",
+            })
+
+        for es in new_ecosystem:
+            installs_str = f"{es.get('installs', 0):,}"
+            skill_options.append({
+                "value": f"__eco__:{es['id']}",
+                "label": f"🌐 {es.get('name', '')}",
+                "description": f"[Ecosystem · {installs_str} installs] {es.get('source', '')}",
+            })
+
+        if skill_options:
+            skill_options.append({
+                "value": "__none__",
+                "label": "None — skip skills",
+                "description": "Proceed without applying any predefined skill playbooks",
+            })
+
+            try:
+                skill_answer = await _ask_user(
+                    "Found skill playbooks (local + ecosystem). Select any to apply (or skip):",
+                    options=skill_options,
+                    selectionType="checkbox",
+                )
+            except asyncio.TimeoutError:
+                return
+
+            if skill_answer.strip() != "__none__":
                 try:
-                    skill_answer = await _ask_user(
-                        "Found skill playbooks that may be useful. Select any to apply (or skip):",
-                        options=skill_options,
-                        selectionType="checkbox",
-                    )
-                except asyncio.TimeoutError:
-                    return
+                    picked = json.loads(skill_answer)
+                    if isinstance(picked, list):
+                        picked_ids = set(picked)
+                    else:
+                        picked_ids = {str(picked)}
+                except (json.JSONDecodeError, ValueError):
+                    picked_ids = {s.strip() for s in skill_answer.split(",") if s.strip()}
 
-                # Parse answer: could be a JSON array, comma-separated IDs,
-                # or a single value.
-                if skill_answer.strip() != "__none__":
-                    try:
-                        picked = json.loads(skill_answer)
-                        if isinstance(picked, list):
-                            picked_ids = set(picked)
-                        else:
-                            picked_ids = {str(picked)}
-                    except (json.JSONDecodeError, ValueError):
-                        picked_ids = {s.strip() for s in skill_answer.split(",") if s.strip()}
+                picked_ids.discard("__none__")
 
-                    picked_ids.discard("__none__")
-                    selected_skills = [s for s in merged_skills if s["_id"] in picked_ids]
+                # Separate local vs ecosystem picks
+                local_picks: set[str] = set()
+                eco_picks: list[dict[str, Any]] = []
+                for pid in picked_ids:
+                    if pid.startswith("__eco__:"):
+                        eco_id = pid.replace("__eco__:", "")
+                        match = next((e for e in new_ecosystem if e.get("id") == eco_id), None)
+                        if match:
+                            eco_picks.append(match)
+                    else:
+                        local_picks.add(pid)
+
+                # Install selected ecosystem skills
+                if eco_picks:
+                    await send({
+                        "type": "system",
+                        "content": f"Installing {len(eco_picks)} ecosystem skill(s)...",
+                        "timestamp": _now(),
+                    })
+                    for eco in eco_picks:
+                        installed = await sanity.install_ecosystem_skill(eco)
+                        if installed:
+                            selected_skills.append(installed)
+                            await send({
+                                "type": "system",
+                                "content": f"✓ Installed \"{installed.get('name')}\" from skills.sh",
+                                "timestamp": _now(),
+                            })
+
+                # Add local picks
+                selected_skills.extend(
+                    s for s in merged_local if s["_id"] in local_picks
+                )
 
         # ── Step 3: Collect required skill inputs ─────────────
         # If any selected skill defines required inputSchema fields,
@@ -828,13 +956,34 @@ async def conversation_ws(websocket: WebSocket, conversation_id: str):
                     )
 
         # ── Inject skill context into objective ───────────────
+        # Structured fields first (steps, tools, output schema),
+        # then the full playbook markdown + references for richer context.
         if selected_skills:
             skill_block = "\n\nSKILL PLAYBOOKS TO FOLLOW:\n"
             for sk in selected_skills:
+                src_label = " [ecosystem]" if sk.get("source") == "ecosystem" else " [local]"
                 steps_text = ""
                 if sk.get("steps"):
                     steps_text = "\n  Steps: " + " → ".join(sk["steps"])
-                skill_block += f"- {sk['name']}: {sk.get('description', '')}{steps_text}\n"
+                tools_text = ""
+                if sk.get("toolsRequired"):
+                    tools_text = "\n  Tools to use: " + ", ".join(sk["toolsRequired"])
+                output_text = ""
+                if sk.get("outputSchema"):
+                    output_text = f"\n  Expected output: {sk['outputSchema']}"
+                # Include the full playbook (Markdown) for richer context
+                playbook_content = ""
+                if sk.get("playbook"):
+                    playbook_content = f"\n  Full playbook:\n{sk['playbook'][:4000]}"
+                # Include reference files (brand scripts, personas, etc.)
+                refs_content = ""
+                refs = sk.get("references") or []
+                if refs:
+                    refs_content = "\n  Reference materials:"
+                    for ref in refs:
+                        truncated = (ref.get("content") or "")[:3000]
+                        refs_content += f"\n  --- {ref.get('name', 'ref')} ---\n{truncated}"
+                skill_block += f"- {sk['name']}{src_label}: {sk.get('description', '')}{steps_text}{tools_text}{output_text}{playbook_content}{refs_content}\n"
             enriched_objective += skill_block
 
         # ── Resolve crew agents if a fixed crew was selected ──
@@ -1081,6 +1230,171 @@ async def conversation_ws(websocket: WebSocket, conversation_id: str):
                             "metadata": {"runId": run_id, **({"tool": event["tool"]} if event.get("tool") else {})},
                             "timestamp": event.get("timestamp", _now()),
                         })
+
+                elif evt_type == "synthesis_ready":
+                    # ── Interactive synthesis ─────────────────────
+                    # The runner collected multiple outputs + possible
+                    # reviewer feedback.  Ask the user before synthesizing.
+                    synth_data = event
+                    sub_outputs = synth_data.get("substantiveOutputs", [])
+                    reviewer_fb = synth_data.get("reviewerFeedback", "")
+                    lead_name = synth_data.get("leadAgentName", "Lead Agent")
+                    lead_model = synth_data.get("leadAgentModel")
+                    synth_objective = synth_data.get("objective", objective)
+
+                    import re as _re_synth
+                    has_reviewer_issues = bool(
+                        reviewer_fb
+                        and _re_synth.search(
+                            r"revise|missing|insufficient|incomplete|needs?\s+(revision|improvement|verification|more)",
+                            reviewer_fb,
+                            _re_synth.IGNORECASE,
+                        )
+                    )
+
+                    # If reviewer flagged issues, ask the user
+                    if has_reviewer_issues:
+                        answer = await _ask_user(
+                            "The reviewer flagged some gaps in the work — mainly due to limited tool access. "
+                            "Produce the final output with available evidence, "
+                            "or would you like to provide additional information first?",
+                            options=[
+                                {
+                                    "value": "proceed",
+                                    "label": "Proceed with available evidence",
+                                    "description": "Synthesize a final deliverable using what the agents gathered",
+                                },
+                                {
+                                    "value": "provide_more",
+                                    "label": "Let me provide more information first",
+                                    "description": "Send additional context before generating the final output",
+                                },
+                            ],
+                            selectionType="radio",
+                        )
+                        if answer == "provide_more" or (
+                            answer and _re_synth.search(
+                                r"more info|provide|address|first", answer, _re_synth.IGNORECASE
+                            )
+                        ):
+                            await send({
+                                "type": "system",
+                                "sender": "system",
+                                "content": "OK — send the additional information and I'll incorporate it into the final output.",
+                                "timestamp": _now(),
+                            })
+                            await sanity.append_message(conversation_id, {
+                                "_key": _msg_key(),
+                                "sender": "system",
+                                "type": "system",
+                                "content": "OK — send the additional information and I'll incorporate it into the final output.",
+                                "timestamp": _now(),
+                            })
+                            # Use lead agent's raw output as fallback
+                            fallback = sub_outputs[0]["output"] if sub_outputs else "No output produced."
+                            await sanity.update_run_status(
+                                run_id, "completed",
+                                completedAt=_now(),
+                                output=fallback,
+                            )
+                            continue
+
+                    # ── Run synthesis ─────────────────────────────
+                    await send({
+                        "type": "thinking",
+                        "sender": lead_name,
+                        "content": "Synthesizing final deliverable...",
+                        "timestamp": _now(),
+                    })
+                    await sanity.append_message(conversation_id, {
+                        "_key": _msg_key(),
+                        "sender": lead_name,
+                        "type": "thinking",
+                        "content": "Synthesizing final deliverable...",
+                        "timestamp": _now(),
+                    })
+
+                    try:
+                        output = await _synthesize_outputs(
+                            runner=runner,
+                            sub_outputs=sub_outputs,
+                            reviewer_feedback=reviewer_fb,
+                            lead_name=lead_name,
+                            lead_model=lead_model,
+                            synth_objective=synth_objective,
+                        )
+                    except Exception as synth_err:
+                        logger.error(f"Synthesis failed: {synth_err}")
+                        output = sub_outputs[0]["output"] if sub_outputs else "No output produced."
+
+                    # Emit synthesized message
+                    await send({
+                        "type": "agent_message",
+                        "sender": lead_name,
+                        "content": output,
+                        "timestamp": _now(),
+                    })
+                    await sanity.append_message(conversation_id, {
+                        "_key": _msg_key(),
+                        "sender": lead_name,
+                        "type": "message",
+                        "content": output,
+                        "timestamp": _now(),
+                    })
+
+                    # Now emit completion (same as the "complete" branch)
+                    await sanity.update_run_status(
+                        run_id, "completed",
+                        completedAt=_now(),
+                        output=output,
+                    )
+                    await send({
+                        "type": "complete",
+                        "runId": run_id,
+                        "output": output,
+                        "timestamp": _now(),
+                    })
+                    await sanity.append_message(conversation_id, {
+                        "_key": _msg_key(),
+                        "sender": "system",
+                        "type": "complete",
+                        "content": (output[:200] + "…") if len(output) > 200 else output,
+                        "metadata": {"runId": run_id, "output": output},
+                        "timestamp": _now(),
+                    })
+                    await sanity.append_message(conversation_id, {
+                        "_key": _msg_key(),
+                        "sender": "system",
+                        "type": "system",
+                        "content": "Run completed.",
+                        "metadata": {"runId": run_id},
+                        "timestamp": _now(),
+                    })
+
+                    # Generate run summary
+                    try:
+                        mem_agent_cfg = None
+                        if memory_policy:
+                            mem_agent_ref = memory_policy.get("agent")
+                            if isinstance(mem_agent_ref, dict):
+                                mem_agent_cfg = mem_agent_ref
+                        conv = await sanity.get_conversation(conversation_id)
+                        conv_msgs = (conv or {}).get("messages", [])
+                        summary = await _generate_run_summary(
+                            memory_agent_config=mem_agent_cfg,
+                            objective=objective,
+                            final_output=output,
+                            conversation_messages=conv_msgs,
+                        )
+                        if summary:
+                            await sanity.update_conversation_summary(
+                                conversation_id, summary
+                            )
+                    except Exception as summary_exc:
+                        logger.warning(
+                            f"Non-critical: failed to generate run summary: "
+                            f"{summary_exc}"
+                        )
 
                 elif evt_type == "complete":
                     output = event.get("finalOutput", "")

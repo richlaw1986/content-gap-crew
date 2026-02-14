@@ -82,6 +82,11 @@ export interface CredentialConfig {
   [key: string]: unknown; // various credential fields
 }
 
+export interface SkillReference {
+  name: string;
+  content: string;
+}
+
 export interface SkillConfig {
   _id: string;
   name: string;
@@ -91,6 +96,13 @@ export interface SkillConfig {
   toolsRequired?: string[];
   inputSchema?: Array<Record<string, unknown>>;
   outputSchema?: string;
+  /** Full narrative instructions (Markdown). Ecosystem skills store their SKILL.md here. */
+  playbook?: string;
+  /** Supporting reference files (brand scripts, personas, etc.) */
+  references?: SkillReference[];
+  source?: "local" | "ecosystem";
+  ecosystemId?: string;
+  ecosystemInstalls?: number;
 }
 
 export interface McpServerConfig {
@@ -224,7 +236,8 @@ export async function listAllSkills(): Promise<SkillConfig[]> {
   return (
     (await client.fetch<SkillConfig[]>(
       `*[_type == "skill" && enabled != false] | order(_updatedAt desc) {
-        _id, name, description, steps, tags, toolsRequired, inputSchema, outputSchema
+        _id, name, description, steps, tags, toolsRequired, inputSchema, outputSchema,
+        playbook, references[]{ name, content }, source, ecosystemId, ecosystemInstalls
       }`
     )) ?? []
   );
@@ -249,9 +262,213 @@ export async function searchSkills(
   }
 
   const groq = `*[${filters.join(" && ")}] | order(_updatedAt desc) [0...$limit] {
-    _id, name, description, steps, tags, toolsRequired, inputSchema, outputSchema
+    _id, name, description, steps, tags, toolsRequired, inputSchema, outputSchema,
+    playbook, references[]{ name, content }, source, ecosystemId, ecosystemInstalls
   }`;
   return (await client.fetch<SkillConfig[]>(groq, params)) ?? [];
+}
+
+// ─── Ecosystem skills (skills.sh) ────────────────────────────
+
+export interface EcosystemSkillResult {
+  id: string;       // e.g. "coreyhaines31/marketingskills/seo-audit"
+  skillId: string;  // e.g. "seo-audit"
+  name: string;
+  installs: number;
+  source: string;   // e.g. "coreyhaines31/marketingskills"
+}
+
+/**
+ * Search the skills.sh open ecosystem for skills matching a query.
+ */
+export async function searchEcosystemSkills(
+  query: string,
+  limit = 10
+): Promise<EcosystemSkillResult[]> {
+  try {
+    const url = `https://skills.sh/api/search?q=${encodeURIComponent(query)}`;
+    const resp = await fetch(url, {
+      headers: { Accept: "application/json" },
+      signal: AbortSignal.timeout(10_000),
+    });
+    if (!resp.ok) return [];
+    const data = (await resp.json()) as {
+      skills: EcosystemSkillResult[];
+      count: number;
+    };
+    return (data.skills || []).slice(0, limit);
+  } catch (e: any) {
+    console.warn(`Ecosystem skill search failed: ${e.message}`);
+    return [];
+  }
+}
+
+/**
+ * Fetch a skill's SKILL.md from GitHub, parse its frontmatter + content,
+ * and install it as a Sanity "skill" document.
+ */
+export async function installEcosystemSkill(
+  ecosystemSkill: EcosystemSkillResult
+): Promise<SkillConfig | null> {
+  const client = getSanityClient();
+  const { id, source, installs } = ecosystemSkill;
+
+  // e.g. source = "coreyhaines31/marketingskills", skillId = "seo-audit"
+  // → raw GitHub: https://raw.githubusercontent.com/{source}/main/skills/{skillId}/SKILL.md
+  const parts = id.split("/");
+  const skillSlug = parts[parts.length - 1];
+  const owner = parts[0];
+  const repo = parts.length >= 2 ? parts[1] : "";
+
+  // Try common branch names and skill path conventions
+  const candidates = [
+    `https://raw.githubusercontent.com/${owner}/${repo}/main/skills/${skillSlug}/SKILL.md`,
+    `https://raw.githubusercontent.com/${owner}/${repo}/master/skills/${skillSlug}/SKILL.md`,
+    `https://raw.githubusercontent.com/${owner}/${repo}/main/${skillSlug}/SKILL.md`,
+  ];
+
+  let rawMd = "";
+  for (const url of candidates) {
+    try {
+      const resp = await fetch(url, { signal: AbortSignal.timeout(10_000) });
+      if (resp.ok) {
+        rawMd = await resp.text();
+        break;
+      }
+    } catch {
+      /* try next */
+    }
+  }
+
+  // Parse YAML frontmatter + markdown body
+  let name = ecosystemSkill.name;
+  let description = "";
+  let tags: string[] = [];
+  let steps: string[] = [];
+
+  if (rawMd) {
+    const fmMatch = rawMd.match(/^---\n([\s\S]*?)\n---/);
+    if (fmMatch) {
+      const fm = fmMatch[1];
+      const nameMatch = fm.match(/^name:\s*(.+)$/m);
+      const descMatch = fm.match(/^description:\s*(.+)$/m);
+      if (nameMatch) name = nameMatch[1].trim();
+      if (descMatch) description = descMatch[1].trim();
+    }
+
+    // Extract steps from numbered lists or bullet lists under "Steps" heading
+    const stepsSection = rawMd.match(/##\s*(?:Steps|How|Procedure|Process)\b[\s\S]*?(?=\n##|\n---|\z)/i);
+    if (stepsSection) {
+      const bullets = stepsSection[0].match(/^(?:\d+\.|[-*])\s+(.+)$/gm);
+      if (bullets) {
+        steps = bullets.map((b) => b.replace(/^(?:\d+\.|[-*])\s+/, "").trim());
+      }
+    }
+
+    // Extract tags from frontmatter
+    const tagsMatch = rawMd.match(/^tags:\s*\[([^\]]*)\]/m);
+    if (tagsMatch) {
+      tags = tagsMatch[1].split(",").map((t) => t.trim().replace(/['"]/g, "")).filter(Boolean);
+    }
+
+    // If no description from frontmatter, use first paragraph after title
+    if (!description) {
+      const bodyAfterFm = rawMd.replace(/^---[\s\S]*?---/, "").trim();
+      const firstPara = bodyAfterFm.match(/^#[^\n]*\n+([^\n#].+)/m);
+      if (firstPara) description = firstPara[1].trim().slice(0, 500);
+    }
+  } else {
+    // No SKILL.md found — use what we have from the search result
+    description = `Ecosystem skill from ${source} (${installs.toLocaleString()} installs)`;
+  }
+
+  // Create a deterministic _id from the ecosystem ID
+  const docId = `skill-eco-${skillSlug}-${owner}`.replace(/[^a-zA-Z0-9_-]/g, "-");
+
+  const doc: Record<string, unknown> = {
+    _id: docId,
+    _type: "skill",
+    name,
+    description,
+    steps: steps.length ? steps : undefined,
+    tags: tags.length ? tags : [skillSlug],
+    source: "ecosystem",
+    ecosystemId: id,
+    ecosystemInstalls: installs,
+    enabled: true,
+  };
+
+  // Store the full SKILL.md as the playbook — this is supplementary
+  // narrative context that enriches the structured fields above.
+  if (rawMd) {
+    doc.playbook = rawMd.slice(0, 8000);
+  }
+
+  // ── Attempt to fetch reference files ───────────────────────
+  // Many skills have a references/ folder with supporting markdown files.
+  // We discover them by looking for `references/*.md` links in SKILL.md,
+  // or by probing common reference file names.
+  const references: SkillReference[] = [];
+  if (rawMd) {
+    // Extract reference file names from markdown links like [xxx](references/foo.md)
+    const refLinks = rawMd.matchAll(/\[([^\]]*)\]\(references\/([^)]+\.md)\)/gi);
+    const refFileNames = new Set<string>();
+    for (const m of refLinks) {
+      refFileNames.add(m[2]); // e.g. "brandscript.md"
+    }
+
+    // Try to fetch each discovered reference file
+    for (const refFile of refFileNames) {
+      const refCandidates = [
+        `https://raw.githubusercontent.com/${owner}/${repo}/main/skills/${skillSlug}/references/${refFile}`,
+        `https://raw.githubusercontent.com/${owner}/${repo}/master/skills/${skillSlug}/references/${refFile}`,
+        `https://raw.githubusercontent.com/${owner}/${repo}/main/${skillSlug}/references/${refFile}`,
+      ];
+      for (const refUrl of refCandidates) {
+        try {
+          const refResp = await fetch(refUrl, { signal: AbortSignal.timeout(8_000) });
+          if (refResp.ok) {
+            const refContent = await refResp.text();
+            const refName = refFile.replace(/\.md$/i, "");
+            references.push({
+              name: refName,
+              content: refContent.slice(0, 8000),
+            });
+            break; // found it, skip other candidates
+          }
+        } catch {
+          /* try next */
+        }
+      }
+    }
+  }
+
+  if (references.length) {
+    doc.references = references.map((r, i) => ({
+      _key: `ref-${i}`,
+      name: r.name,
+      content: r.content,
+    }));
+  }
+
+  try {
+    await client.createOrReplace(doc as any);
+    return {
+      _id: docId,
+      name,
+      description,
+      steps: steps.length ? steps : undefined,
+      tags: tags.length ? tags : [skillSlug],
+      playbook: rawMd ? rawMd.slice(0, 8000) : undefined,
+      references: references.length ? references : undefined,
+      source: "ecosystem",
+      ecosystemId: id,
+      ecosystemInstalls: installs,
+    };
+  } catch (e: any) {
+    console.error(`Failed to install ecosystem skill ${id}: ${e.message}`);
+    return null;
+  }
 }
 
 export async function listMcpServers(): Promise<McpServerConfig[]> {
